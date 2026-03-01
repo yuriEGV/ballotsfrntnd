@@ -5,6 +5,7 @@ import {
     ShieldCheck, Lock, AlertTriangle, FileText
 } from 'lucide-react';
 import axios from 'axios';
+import { API_URL } from '../config.js';
 
 const VotingBooth = () => {
     const { electionId } = useParams();
@@ -32,7 +33,7 @@ const VotingBooth = () => {
 
             try {
                 // Fetch fresh election data from API to ensure candidates are loaded
-                const res = await axios.get(`http://localhost:3000/api/elections/${electionId}`);
+                const res = await axios.get(`${API_URL}/api/elections/${electionId}`);
                 setElection(res.data.data);
             } catch (err) {
                 console.error("Error fetching election data:", err);
@@ -51,7 +52,7 @@ const VotingBooth = () => {
 
         try {
             const token = localStorage.getItem('voterToken');
-            await axios.post('http://localhost:3000/api/ballots', {
+            await axios.post(`${API_URL}/api/ballots`, {
                 candidateId: selectedCandidate === 'blank' || selectedCandidate === 'nulo' ? null : selectedCandidate._id,
                 electionId: electionId,
                 isNulo: selectedCandidate === 'nulo'

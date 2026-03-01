@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { LockKeyhole, Fingerprint, ShieldCheck, Loader2 } from 'lucide-react';
 import axios from 'axios';
+import { API_URL } from '../config.js';
 
 const civicQuotes = [
     { text: "La democracia es el gobierno del pueblo, por el pueblo, para el pueblo.", author: "Abraham Lincoln" },
@@ -34,7 +35,7 @@ const VotingGateway = () => {
         setErrorMsg('');
 
         try {
-            const res = await axios.post('http://localhost:3000/api/voters/auth', {
+            const res = await axios.post(`${API_URL}/api/voters/auth`, {
                 electionId,
                 cedula: cedula.trim()
             });

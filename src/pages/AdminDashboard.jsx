@@ -6,6 +6,7 @@ import {
     Ticket, Trash2, Plus
 } from 'lucide-react';
 import axios from 'axios';
+import { API_URL } from '../config.js';
 
 const AdminDashboard = () => {
     const navigate = useNavigate();
@@ -30,7 +31,7 @@ const AdminDashboard = () => {
     const fetchElections = async () => {
         setLoading(true);
         try {
-            const res = await axios.get('http://localhost:3000/api/elections', authHeaders);
+            const res = await axios.get(`${API_URL}/api/elections`, authHeaders);
             setElections(res.data.data || []);
         } catch (e) {
             console.error('Error fetching elections:', e);
@@ -41,7 +42,7 @@ const AdminDashboard = () => {
 
     const fetchCoupons = async () => {
         try {
-            const res = await axios.get('http://localhost:3000/api/coupons', authHeaders);
+            const res = await axios.get(`${API_URL}/api/coupons`, authHeaders);
             setCoupons(res.data.data || []);
         } catch (e) {
             console.error('Error fetching coupons:', e);
@@ -50,7 +51,7 @@ const AdminDashboard = () => {
 
     const fetchUsers = async () => {
         try {
-            const res = await axios.get('http://localhost:3000/api/users', authHeaders);
+            const res = await axios.get(`${API_URL}/api/users`, authHeaders);
             setUsers(res.data.data || []);
         } catch (e) {
             console.error('Error fetching users:', e);
@@ -69,7 +70,7 @@ const AdminDashboard = () => {
     const fetchReport = async (electionId) => {
         setLoading(true);
         try {
-            const res = await axios.get(`http://localhost:3000/api/elections/${electionId}/report`, authHeaders);
+            const res = await axios.get(`${API_URL}/api/elections/${electionId}/report`, authHeaders);
             setReportData(res.data.data);
             setShowingReport(true);
         } catch (e) {
@@ -82,7 +83,7 @@ const AdminDashboard = () => {
     const fetchAudit = async (electionId) => {
         setLoading(true);
         try {
-            const res = await axios.get(`http://localhost:3000/api/elections/${electionId}/audit`, authHeaders);
+            const res = await axios.get(`${API_URL}/api/elections/${electionId}/audit`, authHeaders);
             setAuditLog(res.data.data);
             setShowingAudit(true);
         } catch (e) {
@@ -95,7 +96,7 @@ const AdminDashboard = () => {
     const handleEvaluate = async (id, approvalStatus, reason = '') => {
         setEvaluating(id);
         try {
-            await axios.put(`http://localhost:3000/api/elections/${id}/evaluate`,
+            await axios.put(`${API_URL}/api/elections/${id}/evaluate`,
                 { approvalStatus, reason }, authHeaders);
             await fetchElections();
         } catch (e) {
@@ -114,7 +115,7 @@ const AdminDashboard = () => {
     const handleCreateCoupon = async (e) => {
         e.preventDefault();
         try {
-            await axios.post('http://localhost:3000/api/coupons/create', newCoupon, authHeaders);
+            await axios.post(`${API_URL}/api/coupons/create`, newCoupon, authHeaders);
             setShowingCouponModal(false);
             setNewCoupon({ code: '', discountPercentage: 10, validUntil: '' });
             fetchCoupons();
@@ -125,7 +126,7 @@ const AdminDashboard = () => {
 
     const handleToggleCoupon = async (id) => {
         try {
-            await axios.patch(`http://localhost:3000/api/coupons/${id}/toggle`, {}, authHeaders);
+            await axios.patch(`${API_URL}/api/coupons/${id}/toggle`, {}, authHeaders);
             fetchCoupons();
         } catch (e) {
             alert('Error al cambiar estado del cupón');
@@ -135,7 +136,7 @@ const AdminDashboard = () => {
     const handleDeleteCoupon = async (id) => {
         if (!confirm('¿Estás seguro de eliminar este cupón?')) return;
         try {
-            await axios.delete(`http://localhost:3000/api/coupons/${id}`, authHeaders);
+            await axios.delete(`${API_URL}/api/coupons/${id}`, authHeaders);
             fetchCoupons();
         } catch (e) {
             alert('Error al eliminar cupón');
@@ -476,7 +477,7 @@ const AdminDashboard = () => {
                                                 <button onClick={async () => {
                                                     try {
                                                         const newRole = u.role === 'admin' ? 'client' : 'admin';
-                                                        await axios.put(`http://localhost:3000/api/users/${u._id}`, { role: newRole }, authHeaders);
+                                                        await axios.put(`${API_URL}/api/users/${u._id}`, { role: newRole }, authHeaders);
                                                         fetchUsers();
                                                     } catch (e) { alert('Error al cambiar rol'); }
                                                 }} className="p-2 text-slate-400 hover:text-blue-500 transition-colors" title="Cambiar Rol">
@@ -485,7 +486,7 @@ const AdminDashboard = () => {
                                                 <button onClick={async () => {
                                                     if (window.confirm('¿Seguro que deseas eliminar este usuario?')) {
                                                         try {
-                                                            await axios.delete(`http://localhost:3000/api/users/${u._id}`, authHeaders);
+                                                            await axios.delete(`${API_URL}/api/users/${u._id}`, authHeaders);
                                                             fetchUsers();
                                                         } catch (e) { alert('Error al eliminar usuario'); }
                                                     }

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { API_URL } from '../config.js';
 import { Calculator, CheckCircle2, ChevronRight, Loader2 } from 'lucide-react';
 
 const QuoteForm = () => {
@@ -48,7 +49,7 @@ const QuoteForm = () => {
         e.preventDefault();
         try {
             setCouponMsg({ type: '', text: '' });
-            const res = await axios.post('http://localhost:3000/api/coupons/validate', { code: couponCode });
+            const res = await axios.post(`${API_URL}/api/coupons/validate`, { code: couponCode });
             setDiscount(res.data.discountPercentage);
             setCouponMsg({ type: 'success', text: `¡Cupón del ${res.data.discountPercentage}% aplicado!` });
         } catch (err) {
@@ -79,7 +80,7 @@ const QuoteForm = () => {
         e.preventDefault();
         setStatus('loading');
         try {
-            await axios.post('http://localhost:3000/api/quotes', formData);
+            await axios.post(`${API_URL}/api/quotes`, formData);
             setStatus('success');
             setFormData({
                 name: '', email: '', phone: '', votersCount: 100,

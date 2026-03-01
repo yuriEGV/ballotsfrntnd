@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { useNavigate, Link } from 'react-router-dom';
 import axios from 'axios';
+import { API_URL } from '../config.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const initials = (name = '') =>
@@ -69,7 +70,7 @@ const NewElectionModal = ({ onClose, onCreated, token }) => {
         if (!form.couponCode) return;
         setValidatingCoupon(true); setError('');
         try {
-            const res = await axios.post('http://localhost:3000/api/coupons/validate', { code: form.couponCode });
+            const res = await axios.post(`${API_URL}/api/coupons/validate`, { code: form.couponCode });
             setDiscount(res.data.discountPercentage);
             setCouponApplied(true);
         } catch (err) {
@@ -84,11 +85,11 @@ const NewElectionModal = ({ onClose, onCreated, token }) => {
     const handleSubmit = async (e) => {
         e.preventDefault(); setError(''); setSaving(true);
         try {
-            const res = await axios.post('http://localhost:3000/api/elections', form, { headers: { Authorization: `Bearer ${token}` } });
+            const res = await axios.post(`${API_URL}/api/elections`, form, { headers: { Authorization: `Bearer ${token}` } });
             const election = res.data.data;
 
             if (!election.isPaid) {
-                const payRes = await axios.post('http://localhost:3000/api/payments/create-preference',
+                const payRes = await axios.post(`${API_URL}/api/payments/create-preference`,
                     { electionId: election._id },
                     { headers: { Authorization: `Bearer ${token}` } }
                 );
@@ -315,7 +316,7 @@ const BulkImportModal = ({ electionId, onClose, onImported, token }) => {
 
             if (voters.length === 0) throw new Error("No se encontraron registros válidos (Formato: Nombre, RUT, Email)");
 
-            await axios.post('http://localhost:3000/api/voters/bulk', {
+            await axios.post(`${API_URL}/api/voters/bulk`, {
                 electionId,
                 voters
             }, { headers: { Authorization: `Bearer ${token}` } });
@@ -378,7 +379,7 @@ const VotersView = ({ elections, token }) => {
         if (!id) return;
         setLoading(true);
         try {
-            const res = await axios.get(`http://localhost:3000/api/elections/${id}/voters`, { headers: { Authorization: `Bearer ${token}` } });
+            const res = await axios.get(`${API_URL}/api/elections/${id}/voters`, { headers: { Authorization: `Bearer ${token}` } });
             setStats(res.data.stats);
             setVoters(res.data.data || []);
         } catch { setVoters([]); setStats(null); }
@@ -529,7 +530,7 @@ const ConfigView = ({ user, elections, token, onRefresh, handlePayment }) => {
     const loadElection = async (id) => {
         if (!id) { setSelectedElection(null); setForm(null); return; }
         try {
-            const res = await axios.get(`http://localhost:3000/api/elections/${id}`, { headers: { Authorization: `Bearer ${token}` } });
+            const res = await axios.get(`${API_URL}/api/elections/${id}`, { headers: { Authorization: `Bearer ${token}` } });
             const e = res.data.data;
             setSelectedElection(e);
             setForm({
@@ -564,7 +565,7 @@ const ConfigView = ({ user, elections, token, onRefresh, handlePayment }) => {
     const save = async () => {
         setSaving(true); setMsg('');
         try {
-            await axios.put(`http://localhost:3000/api/elections/${selectedElection._id}`, form, { headers: { Authorization: `Bearer ${token}` } });
+            await axios.put(`${API_URL}/api/elections/${selectedElection._id}`, form, { headers: { Authorization: `Bearer ${token}` } });
             setMsg('✅ Configuración guardada correctamente.');
             const link = `${window.location.origin}/vote/${selectedElection._id}`;
             setVotingLink(link);
@@ -827,7 +828,7 @@ const ClientDashboard = () => {
     const fetchElections = async () => {
         setLoading(true);
         try {
-            const res = await axios.get('http://localhost:3000/api/elections', { headers: { Authorization: `Bearer ${token}` } });
+            const res = await axios.get(`${API_URL}/api/elections`, { headers: { Authorization: `Bearer ${token}` } });
             setElections(res.data.data || []);
         } catch { }
         finally { setLoading(false); }
@@ -835,7 +836,7 @@ const ClientDashboard = () => {
 
     const handlePayment = async (electionId) => {
         try {
-            const res = await axios.post('http://localhost:3000/api/payments/create-preference',
+            const res = await axios.post(`${API_URL}/api/payments/create-preference`,
                 { electionId },
                 { headers: { Authorization: `Bearer ${token}` } }
             );
@@ -850,7 +851,7 @@ const ClientDashboard = () => {
     const fetchAudit = async (electionId) => {
         setLoading(true);
         try {
-            const res = await axios.get(`http://localhost:3000/api/elections/${electionId}/audit`, { headers: { Authorization: `Bearer ${token}` } });
+            const res = await axios.get(`${API_URL}/api/elections/${electionId}/audit`, { headers: { Authorization: `Bearer ${token}` } });
             setAuditLog(res.data.data);
             setShowingAudit(true);
         } catch (e) {
@@ -863,7 +864,7 @@ const ClientDashboard = () => {
     const fetchReport = async (electionId) => {
         setLoading(true);
         try {
-            const res = await axios.get(`http://localhost:3000/api/elections/${electionId}/report`, { headers: { Authorization: `Bearer ${token}` } });
+            const res = await axios.get(`${API_URL}/api/elections/${electionId}/report`, { headers: { Authorization: `Bearer ${token}` } });
             setReportData(res.data.data);
             setShowingReport(true);
         } catch (e) {

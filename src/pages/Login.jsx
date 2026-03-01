@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Lock, Mail, Loader2, User, Building2, ArrowLeft } from 'lucide-react';
 import axios from 'axios';
+import { API_URL } from '../config.js';
 
 const inputClass = "w-full px-5 py-4 rounded-xl border border-slate-200 focus:ring-4 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none font-medium bg-slate-50 focus:bg-white text-slate-900 placeholder:text-slate-400";
 const labelClass = "text-sm font-bold text-slate-700 flex items-center gap-2 mb-2";
@@ -27,7 +28,7 @@ const Login = () => {
         setLoginStatus('loading');
         setLoginError('');
         try {
-            const res = await axios.post('http://localhost:3000/api/auth/login', loginData);
+            const res = await axios.post(`${API_URL}/api/auth/login`, loginData);
             const { token, user } = res.data;
             localStorage.setItem('adminToken', token);
             localStorage.setItem('adminUser', JSON.stringify(user));
@@ -56,7 +57,7 @@ const Login = () => {
 
         setRegStatus('loading');
         try {
-            await axios.post('http://localhost:3000/api/auth/register', {
+            await axios.post(`${API_URL}/api/auth/register`, {
                 username: regData.username,
                 email: regData.email,
                 password: regData.password,
