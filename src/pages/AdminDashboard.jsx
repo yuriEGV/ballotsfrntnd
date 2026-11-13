@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import {
     Activity, Users, LogOut, CheckCircle, XCircle, ShieldCheck,
     Clock, Mail, FileText, Printer, RefreshCw, AlertTriangle, ClipboardList,
-    Ticket, Trash2, Plus, ExternalLink, Loader2
+    Ticket, Trash2, Plus, ExternalLink, Loader2, Edit2, UserPlus, Globe
 } from 'lucide-react';
 import axios from 'axios';
 import { API_URL } from '../config.js';
@@ -14,6 +14,7 @@ const AdminDashboard = () => {
     const [activeView, setActiveView] = useState('approvals');
     const [loading, setLoading] = useState(false);
     const [evaluating, setEvaluating] = useState(null);
+    const [updatingElectionId, setUpdatingElectionId] = useState(null);
     const [reportData, setReportData] = useState(null);
     const [auditLog, setAuditLog] = useState(null);
     const [showingReport, setShowingReport] = useState(false);
@@ -22,9 +23,24 @@ const AdminDashboard = () => {
     const [showingCouponModal, setShowingCouponModal] = useState(false);
     const [newCoupon, setNewCoupon] = useState({ code: '', discountPercentage: 10, validUntil: '' });
     const [users, setUsers] = useState([]);
+    const [showingUserModal, setShowingUserModal] = useState(false);
+    const [editingUser, setEditingUser] = useState(null);
+    const [userForm, setUserForm] = useState({ username: '', email: '', organization: '', role: 'organizer', password: '' });
+    const [savingUser, setSavingUser] = useState(false);
+    const [userModalError, setUserModalError] = useState('');
 
     const token = localStorage.getItem('adminToken');
     const authHeaders = useMemo(() => ({ headers: { Authorization: `Bearer ${token}` } }), [token]);
+
+    const handleAuthError = useCallback((err) => {
+        if (err?.response?.status === 401) {
+            localStorage.removeItem('adminToken');
+            localStorage.removeItem('adminUser');
+            navigate('/login?next=%2Fadmin-dashboard', { replace: true });
+            return true;
+        }
+        return false;
+    }, [navigate]);
 
     const fetchElections = useCallback(async () => {
         if (!token) return;
@@ -33,11 +49,13 @@ const AdminDashboard = () => {
             const res = await axios.get(`${API_URL}/api/elections`, authHeaders);
             setElections(res.data.data || []);
         } catch (err) {
-            console.error('Error fetching elections:', err);
+            if (!handleAuthError(err)) {
+                console.error('Error fetching elections:', err);
+            }
         } finally {
             setLoading(false);
         }
-    }, [token, authHeaders]);
+    }, [token, authHeaders, handleAuthError]);
 
     const fetchCoupons = useCallback(async () => {
         if (!token) return;
@@ -45,9 +63,9 @@ const AdminDashboard = () => {
             const res = await axios.get(`${API_URL}/api/coupons`, authHeaders);
             setCoupons(res.data.data || []);
         } catch (err) {
-            console.error('Error fetching coupons:', err);
+            handleAuthError(err);
         }
-    }, [token, authHeaders]);
+    }, [token, authHeaders, handleAuthError]);
 
     const fetchUsers = useCallback(async () => {
         if (!token) return;
@@ -55,12 +73,12 @@ const AdminDashboard = () => {
             const res = await axios.get(`${API_URL}/api/users`, authHeaders);
             setUsers(res.data.data || []);
         } catch (err) {
-            console.error('Error fetching users:', err);
+            handleAuthError(err);
         }
-    }, [token, authHeaders]);
+    }, [token, authHeaders, handleAuthError]);
 
     useEffect(() => {
-        if (!token) { navigate('/login'); return; }
+        if (!token) { navigate('/login?next=%2Fadmin-dashboard'); return; }
         fetchElections();
         fetchCoupons();
         fetchUsers();
@@ -144,6 +162,115 @@ const AdminDashboard = () => {
         }
     };
 
+    const handleChangeElectionStatus = async (electionId, nextStatus) => {
+        setUpdatingElectionId(electionId);
+        try {
+            await axios.put(
+                `${API_URL}/api/elections/${electionId}/status`,
+                { status: nextStatus },
+                authHeaders
+            );
+            await fetchElections();
+        } catch (err) {
+            if (!handleAuthError(err)) {
+                alert(err.response?.data?.message || err.response?.data?.error || 'No se pudo cambiar el estado del proceso.');
+            }
+        } finally {
+            setUpdatingElectionId(null);
+        }
+    };
+
+    const openCreateUserModal = () => {
+        setEditingUser(null);
+        setUserForm({ username: '', email: '', organization: '', role: 'organizer', password: '' });
+        setUserModalError('');
+        setShowingUserModal(true);
+    };
+
+    const openEditUserModal = (u) => {
+        setEditingUser(u);
+        setUserForm({
+            username: u.username || '',
+            email: u.email || '',
+            organization: u.organization || '',
+            role: u.role || 'organizer',
+            password: ''
+        });
+        setUserModalError('');
+        setShowingUserModal(true);
+    };
+
+    const handleSaveUser = async (e) => {
+        e.preventDefault();
+        setUserModalError('');
+        setSavingUser(true);
+        try {
+            if (editingUser) {
+                const payload = {
+                    username: userForm.username,
+                    email: userForm.email,
+                    organization: userForm.organization,
+                    role: userForm.role,
+                    ...(userForm.password ? { password: userForm.password } : {})
+                };
+                await axios.put(`${API_URL}/api/users/${editingUser._id}`, payload, authHeaders);
+            } else {
+                await axios.post(`${API_URL}/api/users`, userForm, authHeaders);
+            }
+            setShowingUserModal(false);
+            setEditingUser(null);
+            await fetchUsers();
+        } catch (err) {
+            if (!handleAuthError(err)) {
+                setUserModalError(err.response?.data?.message || err.response?.data?.error || 'Error al guardar usuario.');
+            }
+        } finally {
+            setSavingUser(false);
+        }
+    };
+
+    const handleToggleUserRole = async (u) => {
+        try {
+            const newRole = u.role === 'admin' ? 'organizer' : 'admin';
+            await axios.put(`${API_URL}/api/users/${u._id}`, { role: newRole }, authHeaders);
+            await fetchUsers();
+        } catch (err) {
+            if (!handleAuthError(err)) {
+                alert(err.response?.data?.message || err.response?.data?.error || 'Error al cambiar rol');
+            }
+        }
+    };
+
+    const handleDeleteUser = async (u) => {
+        if (!confirm(`¿Eliminar usuario "${u.username}" (${u.email})?`)) return;
+        try {
+            await axios.delete(`${API_URL}/api/users/${u._id}`, authHeaders);
+            await fetchUsers();
+        } catch (err) {
+            if (!handleAuthError(err)) {
+                alert(err.response?.data?.message || err.response?.data?.error || 'Error al eliminar usuario');
+            }
+        }
+    };
+
+    const electionLifecycleBadge = (status) => {
+        const styles = {
+            active: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+            draft: 'bg-amber-100 text-amber-800 border-amber-200',
+            ended: 'bg-slate-200 text-slate-700 border-slate-300',
+        };
+        const labels = {
+            active: 'Activa',
+            draft: 'Pendiente / Pausada',
+            ended: 'Apagada / Finalizada',
+        };
+        return (
+            <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${styles[status] || styles.draft}`}>
+                {labels[status] || status || 'Pendiente'}
+            </span>
+        );
+    };
+
     const pendingElections = elections.filter(e => e.requiresAdminReview && e.approvalStatus === 'pending');
     const rejectedElections = elections.filter(e => e.approvalStatus === 'rejected');
 
@@ -168,6 +295,7 @@ const AdminDashboard = () => {
                     <div className="flex items-center gap-3 mb-2 flex-wrap">
                         <h3 className="font-bold text-slate-900 text-lg truncate">{election.title}</h3>
                         {statusBadge(election.approvalStatus)}
+                        {electionLifecycleBadge(election.status)}
                         <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase ${election.processKind === 'survey' || election.questions?.length ? 'bg-cyan-100 text-cyan-800' : 'bg-blue-100 text-blue-800'}`}>
                             {election.processKind === 'survey' || election.questions?.length ? 'Encuesta' : 'Votación'}
                         </span>
@@ -195,7 +323,18 @@ const AdminDashboard = () => {
                     </div>
                 </div>
 
-                <div className="flex gap-2 shrink-0">
+                <div className="flex gap-2 shrink-0 flex-wrap items-center">
+                    <select
+                        aria-label="Estado de la elección"
+                        value={election.status || 'draft'}
+                        disabled={updatingElectionId === election._id}
+                        onChange={(e) => handleChangeElectionStatus(election._id, e.target.value)}
+                        className="px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-xs font-bold text-slate-700 outline-none focus:ring-2 focus:ring-blue-500/30 disabled:opacity-60"
+                    >
+                        <option value="draft">Pendiente / Pausada</option>
+                        <option value="active">Activa</option>
+                        <option value="ended">Apagada / Finalizada</option>
+                    </select>
                     {election.approvalStatus === 'pending' && (
                         <>
                             <button
@@ -269,6 +408,20 @@ const AdminDashboard = () => {
                     <button onClick={() => setActiveView('users')} className={`w-full text-left flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-colors ${activeView === 'users' ? 'bg-purple-600/15 text-purple-400' : 'hover:bg-slate-800 hover:text-white'}`}>
                         <Users size={18} /> Gestión de Usuarios
                     </button>
+                    <div className="pt-3 mt-3 border-t border-slate-800 space-y-1">
+                        <Link
+                            to="/dashboard?new=survey"
+                            className="w-full text-left flex items-center gap-3 px-4 py-3 rounded-xl font-medium text-sky-300 hover:bg-sky-500/10 hover:text-sky-200 transition-colors"
+                        >
+                            <Plus size={18} /> Crear Encuesta / Votación
+                        </Link>
+                        <Link
+                            to="/plaza"
+                            className="w-full text-left flex items-center gap-3 px-4 py-3 rounded-xl font-medium text-cyan-300 hover:bg-cyan-500/10 hover:text-cyan-200 transition-colors"
+                        >
+                            <Globe size={18} /> Plaza Ciudadana
+                        </Link>
+                    </div>
                 </nav>
                 <div className="p-4 border-t border-slate-800">
                     <button onClick={handleLogout} className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-slate-800 hover:bg-red-500/10 hover:text-red-400 rounded-xl font-medium transition-all text-sm">
@@ -482,7 +635,16 @@ const AdminDashboard = () => {
 
                 {activeView === 'users' && (
                     <div className="space-y-6">
-                        <h3 className="text-xl font-bold text-slate-900">Gestión de Usuarios</h3>
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <h3 className="text-xl font-bold text-slate-900">Gestión de Usuarios</h3>
+                            <button
+                                type="button"
+                                onClick={openCreateUserModal}
+                                className="inline-flex items-center gap-2 px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition-colors shadow-sm"
+                            >
+                                <UserPlus size={15} /> Nuevo Usuario
+                            </button>
+                        </div>
                         <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm">
                             <table className="w-full text-sm">
                                 <thead className="bg-slate-50 border-b border-slate-100">
@@ -496,32 +658,42 @@ const AdminDashboard = () => {
                                 <tbody className="divide-y divide-slate-50">
                                     {users.map(u => (
                                         <tr key={u._id} className="hover:bg-slate-50">
-                                            <td className="p-4 font-bold text-slate-800">{u.username}</td>
+                                            <td className="p-4">
+                                                <p className="font-bold text-slate-800">{u.username}</p>
+                                                {u.organization && (
+                                                    <p className="text-xs text-slate-400 font-medium">{u.organization}</p>
+                                                )}
+                                            </td>
                                             <td className="p-4 text-slate-500">{u.email}</td>
                                             <td className="p-4 text-center">
-                                                <span className={`px-2 py-1 rounded-full text-[10px] font-bold ${u.role === 'admin' ? 'bg-red-100 text-red-700' : 'bg-blue-100 text-blue-700'}`}>
-                                                    {u.role.toUpperCase()}
+                                                <span className={`px-2 py-1 rounded-full text-[10px] font-bold ${u.role === 'admin' ? 'bg-red-100 text-red-700' : u.role === 'observer' ? 'bg-slate-100 text-slate-700' : 'bg-blue-100 text-blue-700'}`}>
+                                                    {(u.role || 'organizer').toUpperCase()}
                                                 </span>
                                             </td>
                                             <td className="p-4 text-right flex justify-end gap-2">
-                                                <button onClick={async () => {
-                                                    try {
-                                                        const newRole = u.role === 'admin' ? 'client' : 'admin';
-                                                        await axios.put(`${API_URL}/api/users/${u._id}`, { role: newRole }, authHeaders);
-                                                        fetchUsers();
-                                                    } catch { alert('Error al cambiar rol'); }
-                                                }} className="p-2 text-slate-400 hover:text-blue-500 transition-colors" title="Cambiar Rol">
-                                                    <RefreshCw size={18} />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => openEditUserModal(u)}
+                                                    className="p-2 text-slate-400 hover:text-indigo-600 transition-colors"
+                                                    title="Editar Usuario"
+                                                >
+                                                    <Edit2 size={17} />
                                                 </button>
-                                                <button onClick={async () => {
-                                                    if (window.confirm('¿Seguro que deseas eliminar este usuario?')) {
-                                                        try {
-                                                            await axios.delete(`${API_URL}/api/users/${u._id}`, authHeaders);
-                                                            fetchUsers();
-                                                        } catch { alert('Error al eliminar usuario'); }
-                                                    }
-                                                }} className="p-2 text-slate-400 hover:text-red-500 transition-colors">
-                                                    <Trash2 size={18} />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleToggleUserRole(u)}
+                                                    className="p-2 text-slate-400 hover:text-blue-500 transition-colors"
+                                                    title="Alternar Admin / Organizador"
+                                                >
+                                                    <RefreshCw size={17} />
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleDeleteUser(u)}
+                                                    className="p-2 text-slate-400 hover:text-red-500 transition-colors"
+                                                    title="Eliminar Usuario"
+                                                >
+                                                    <Trash2 size={17} />
                                                 </button>
                                             </td>
                                         </tr>
@@ -701,6 +873,98 @@ const AdminDashboard = () => {
                                 <input required type="number" min="1" max="100" className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none font-bold" value={newCoupon.discountPercentage} onChange={e => setNewCoupon({ ...newCoupon, discountPercentage: e.target.value })} />
                             </div>
                             <button type="submit" className="w-full py-4 bg-slate-900 text-white rounded-xl font-bold mt-4">Guardar Cupón</button>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Create / Edit User Modal */}
+            {showingUserModal && (
+                <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[150] flex items-center justify-center p-4">
+                    <div className="bg-white rounded-[2rem] w-full max-w-md shadow-2xl relative p-8">
+                        <div className="flex justify-between items-center mb-6">
+                            <h3 className="text-2xl font-black text-slate-900">
+                                {editingUser ? 'Editar Usuario' : 'Crear Usuario'}
+                            </h3>
+                            <button
+                                type="button"
+                                onClick={() => setShowingUserModal(false)}
+                                className="text-slate-400 hover:text-slate-600"
+                            >
+                                <XCircle size={24} />
+                            </button>
+                        </div>
+                        <form onSubmit={handleSaveUser} className="space-y-4">
+                            <div className="space-y-1">
+                                <label className="text-xs font-bold text-slate-500 uppercase tracking-widest pl-1">Nombre de Usuario *</label>
+                                <input
+                                    required
+                                    type="text"
+                                    placeholder="ej: maria.lopez"
+                                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none font-semibold"
+                                    value={userForm.username}
+                                    onChange={e => setUserForm({ ...userForm, username: e.target.value })}
+                                />
+                            </div>
+                            <div className="space-y-1">
+                                <label className="text-xs font-bold text-slate-500 uppercase tracking-widest pl-1">Email *</label>
+                                <input
+                                    required
+                                    type="email"
+                                    placeholder="usuario@empresa.cl"
+                                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none font-semibold"
+                                    value={userForm.email}
+                                    onChange={e => setUserForm({ ...userForm, email: e.target.value })}
+                                />
+                            </div>
+                            <div className="space-y-1">
+                                <label className="text-xs font-bold text-slate-500 uppercase tracking-widest pl-1">Organización</label>
+                                <input
+                                    type="text"
+                                    placeholder="ej: Sindicato / Fundación"
+                                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none font-semibold"
+                                    value={userForm.organization}
+                                    onChange={e => setUserForm({ ...userForm, organization: e.target.value })}
+                                />
+                            </div>
+                            <div className="space-y-1">
+                                <label className="text-xs font-bold text-slate-500 uppercase tracking-widest pl-1">Rol *</label>
+                                <select
+                                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none font-bold"
+                                    value={userForm.role}
+                                    onChange={e => setUserForm({ ...userForm, role: e.target.value })}
+                                >
+                                    <option value="organizer">Organizador (Cliente)</option>
+                                    <option value="admin">Administrador</option>
+                                    <option value="observer">Observador</option>
+                                </select>
+                            </div>
+                            <div className="space-y-1">
+                                <label className="text-xs font-bold text-slate-500 uppercase tracking-widest pl-1">
+                                    {editingUser ? 'Nueva Contraseña (opcional)' : 'Contraseña *'}
+                                </label>
+                                <input
+                                    required={!editingUser}
+                                    minLength={6}
+                                    type="password"
+                                    placeholder={editingUser ? 'Dejar vacío para mantener la actual' : 'Mínimo 6 caracteres'}
+                                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none font-semibold"
+                                    value={userForm.password}
+                                    onChange={e => setUserForm({ ...userForm, password: e.target.value })}
+                                />
+                            </div>
+                            {userModalError && (
+                                <p className="text-red-600 text-xs font-bold bg-red-50 border border-red-200 rounded-xl p-3">
+                                    {userModalError}
+                                </p>
+                            )}
+                            <button
+                                type="submit"
+                                disabled={savingUser}
+                                className="w-full py-4 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold mt-2 disabled:opacity-60"
+                            >
+                                {savingUser ? 'Guardando...' : editingUser ? 'Guardar Cambios' : 'Crear Usuario'}
+                            </button>
                         </form>
                     </div>
                 </div>

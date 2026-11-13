@@ -5,7 +5,7 @@ import {
     Trash2, Plus, Link2, Copy, ExternalLink, MessageSquareText, Vote,
     LogOut, Upload, X, Settings, ShieldCheck, FileText, Printer, XCircle, CreditCard, Sparkles, BarChart3
 } from 'lucide-react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import axios from 'axios';
 import { API_URL } from '../config.js';
 import {
@@ -25,8 +25,8 @@ const inputClass = "w-full px-4 py-3 rounded-xl border border-slate-200 focus:ri
 
 const statusMap = {
     active: { label: 'Activa', dot: 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]', btn: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200', btnLabel: 'Ver' },
-    draft: { label: 'Borrador / Pendiente', dot: 'bg-amber-400', btn: 'bg-amber-100 text-amber-700 hover:bg-amber-200', btnLabel: 'Configurar' },
-    ended: { label: 'Finalizada', dot: 'bg-slate-300', btn: 'bg-slate-100 text-slate-600 hover:bg-slate-200', btnLabel: 'Configurar' },
+    draft: { label: 'Pendiente / Pausada', dot: 'bg-amber-400', btn: 'bg-amber-100 text-amber-700 hover:bg-amber-200', btnLabel: 'Configurar' },
+    ended: { label: 'Apagada / Finalizada', dot: 'bg-slate-300', btn: 'bg-slate-100 text-slate-600 hover:bg-slate-200', btnLabel: 'Configurar' },
 };
 
 const ALL_EVENT_TYPES = Array.from(new Set([...ELECTION_EVENT_TYPES, ...SURVEY_EVENT_TYPES]));
@@ -38,7 +38,7 @@ const createEmptyQuestion = () => ({
 });
 
 // ── New Election / Survey Modal ─────────────────────────────────────────────
-const NewElectionModal = ({ onClose, onCreated, token }) => {
+const NewElectionModal = ({ onClose, onCreated, token, initialProcessKind = 'election' }) => {
     const [form, setForm] = useState({
         processKind: 'election',
         title: '',
@@ -119,6 +119,18 @@ const NewElectionModal = ({ onClose, onCreated, token }) => {
         next[qIdx] = { ...next[qIdx], options: (next[qIdx].options || []).filter((_, idx) => idx !== optIdx) };
         return { ...f, questions: next };
     });
+
+    useEffect(() => {
+        if (initialProcessKind === 'survey') {
+            setForm(f => ({
+                ...f,
+                processKind: 'survey',
+                electionType: SURVEY_EVENT_TYPES[0] || f.electionType,
+                questions: f.questions?.length ? f.questions : [createEmptyQuestion()],
+                plaza: { ...(f.plaza || {}), featuredInPlaza: true }
+            }));
+        }
+    }, [initialProcessKind]);
 
     const [discount, setDiscount] = useState(0);
     const [validatingCoupon, setValidatingCoupon] = useState(false);
@@ -910,13 +922,16 @@ const ConfigView = ({ user, elections, token, onRefresh, handlePayment }) => {
                 { status: nextStatus },
                 { headers: { Authorization: `Bearer ${token}` } }
             );
-            setMsg(nextStatus === 'ended'
-                ? '✅ Proceso finalizado y sello Merkle anclado en Web3.'
-                : '✅ Proceso activado correctamente.');
+            const statusMessages = {
+                active: '✅ Proceso activado correctamente.',
+                draft: '⏸️ Proceso marcado como Pendiente / Pausado.',
+                ended: '✅ Proceso apagado / finalizado y sello Merkle anclado en Web3.',
+            };
+            setMsg(statusMessages[nextStatus] || '✅ Estado actualizado correctamente.');
             await loadElection(selectedElection._id);
             onRefresh();
         } catch (err) {
-            setMsg('❌ ' + (err.response?.data?.error || 'No se pudo cambiar el estado.'));
+            setMsg('❌ ' + (err.response?.data?.message || err.response?.data?.error || 'No se pudo cambiar el estado.'));
         } finally {
             setUpdatingStatus(false);
         }
@@ -983,6 +998,48 @@ const ConfigView = ({ user, elections, token, onRefresh, handlePayment }) => {
                         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-6">
                             <h3 className="text-lg font-bold text-slate-900">Detalles de la Elección</h3>
 
+                            {/* Estado del Proceso (Pendiente / Activa / Apagada) */}
+                            {selectedElection && (
+                                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                    <div>
+                                        <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Estado de la Elección / Encuesta</p>
+                                        <p className="text-sm font-bold text-slate-900 mt-0.5">
+                                            {(statusMap[selectedElection.status] || statusMap.draft).label}
+                                        </p>
+                                    </div>
+                                    <div className="flex items-center gap-2 flex-wrap">
+                                        <button
+                                            type="button"
+                                            disabled={updatingStatus || selectedElection.status === 'draft'}
+                                            onClick={() => handleChangeStatus('draft')}
+                                            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-colors disabled:opacity-50 ${selectedElection.status === 'draft' ? 'bg-amber-500 text-white' : 'bg-white border border-amber-200 text-amber-700 hover:bg-amber-50'}`}
+                                        >
+                                            Pendiente / Pausar
+                                        </button>
+                                        <button
+                                            type="button"
+                                            disabled={
+                                                updatingStatus ||
+                                                selectedElection.status === 'active' ||
+                                                (user?.role !== 'admin' && ((!selectedElection.isPaid && (selectedElection.price ?? 0) > 0) || (selectedElection.requiresAdminReview && selectedElection.approvalStatus !== 'approved')))
+                                            }
+                                            onClick={() => handleChangeStatus('active')}
+                                            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-colors disabled:opacity-50 ${selectedElection.status === 'active' ? 'bg-emerald-600 text-white' : 'bg-white border border-emerald-200 text-emerald-700 hover:bg-emerald-50'}`}
+                                        >
+                                            {updatingStatus ? 'Actualizando...' : 'Activar'}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            disabled={updatingStatus || selectedElection.status === 'ended'}
+                                            onClick={() => handleChangeStatus('ended')}
+                                            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-colors disabled:opacity-50 ${selectedElection.status === 'ended' ? 'bg-slate-800 text-white' : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'}`}
+                                        >
+                                            Apagar / Finalizar
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+
                             {/* Pago Pendiente - POSICIÓN SUPERIOR PARA VISIBILIDAD */}
                             {selectedElection && !selectedElection.isPaid && (
                                 <div className="bg-amber-50 border border-amber-200 rounded-2xl p-6 space-y-4 my-2">
@@ -1011,7 +1068,7 @@ const ConfigView = ({ user, elections, token, onRefresh, handlePayment }) => {
                                     <div className="flex items-center gap-3">
                                         <CheckCircle className="text-emerald-600" size={20} />
                                         <div>
-                                            <p className="text-emerald-800 font-bold text-sm">Pago Validado ({selectedElection.status === 'active' ? 'Proceso Activo' : selectedElection.status === 'ended' ? 'Proceso Finalizado' : 'Listo para Activar'})</p>
+                                            <p className="text-emerald-800 font-bold text-sm">Pago Validado ({selectedElection.status === 'active' ? 'Proceso Activo' : selectedElection.status === 'ended' ? 'Proceso Apagado / Finalizado' : 'Pendiente / Pausado'})</p>
                                             <p className="text-emerald-700/70 text-xs font-medium">
                                                 {selectedElection.requiresAdminReview && selectedElection.approvalStatus === 'pending'
                                                     ? 'Pendiente de revisión de Paquete Completo de Auditorías.'
@@ -1019,26 +1076,6 @@ const ConfigView = ({ user, elections, token, onRefresh, handlePayment }) => {
                                             </p>
                                         </div>
                                     </div>
-                                    {(!selectedElection.requiresAdminReview || selectedElection.approvalStatus === 'approved') && selectedElection.status === 'draft' && (
-                                        <button
-                                            type="button"
-                                            disabled={updatingStatus}
-                                            onClick={() => handleChangeStatus('active')}
-                                            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-colors disabled:opacity-60"
-                                        >
-                                            {updatingStatus ? 'Activando...' : 'Activar Ahora'}
-                                        </button>
-                                    )}
-                                    {selectedElection.status === 'active' && (
-                                        <button
-                                            type="button"
-                                            disabled={updatingStatus}
-                                            onClick={() => handleChangeStatus('ended')}
-                                            className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition-colors disabled:opacity-60"
-                                        >
-                                            {updatingStatus ? 'Sellando...' : 'Finalizar y Sellar Tally Web3'}
-                                        </button>
-                                    )}
                                 </div>
                             )}
 
@@ -1284,10 +1321,12 @@ const ConfigView = ({ user, elections, token, onRefresh, handlePayment }) => {
 // ── Main Dashboard ────────────────────────────────────────────────────────────
 const ClientDashboard = () => {
     const navigate = useNavigate();
+    const [searchParams, setSearchParams] = useSearchParams();
     const [activeView, setActiveView] = useState('elections');
     const [elections, setElections] = useState([]);
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
+    const [modalProcessKind, setModalProcessKind] = useState('election');
     const [search, setSearch] = useState('');
 
     // Audit & Report states
@@ -1296,12 +1335,31 @@ const ClientDashboard = () => {
     const [showingReport, setShowingReport] = useState(false);
     const [showingAudit, setShowingAudit] = useState(false);
 
-    const user = useMemo(() => JSON.parse(localStorage.getItem('adminUser') || '{}'), []);
+    const user = useMemo(() => {
+        try {
+            return JSON.parse(localStorage.getItem('adminUser') || '{}');
+        } catch {
+            return {};
+        }
+    }, []);
     const token = localStorage.getItem('adminToken');
 
     useEffect(() => {
-        if (!token || !user?.email) navigate('/login');
+        if (!token || !user?.email) {
+            const next = encodeURIComponent(window.location.pathname + window.location.search);
+            navigate(`/login?next=${next}`, { replace: true });
+        }
     }, [navigate, token, user?.email]);
+
+    useEffect(() => {
+        if (!token || !user?.email) return;
+        const requestedNew = searchParams.get('new');
+        if (requestedNew === 'survey' || requestedNew === 'election') {
+            setModalProcessKind(requestedNew);
+            setShowModal(true);
+            setSearchParams({}, { replace: true });
+        }
+    }, [searchParams, setSearchParams, token, user?.email]);
 
     const fetchElections = useCallback(async () => {
         if (!token) return;
@@ -1309,12 +1367,19 @@ const ClientDashboard = () => {
         try {
             const res = await axios.get(`${API_URL}/api/elections`, { headers: { Authorization: `Bearer ${token}` } });
             setElections(res.data.data || []);
-        } catch {
+        } catch (err) {
+            if (err?.response?.status === 401) {
+                localStorage.removeItem('adminToken');
+                localStorage.removeItem('adminUser');
+                const next = encodeURIComponent(window.location.pathname + window.location.search);
+                navigate(`/login?next=${next}`, { replace: true });
+                return;
+            }
             setElections([]);
         } finally {
             setLoading(false);
         }
-    }, [token]);
+    }, [token, navigate]);
 
     const handlePayment = async (electionId) => {
         try {
@@ -1387,7 +1452,17 @@ const ClientDashboard = () => {
 
     return (
         <>
-            {showModal && <NewElectionModal onClose={() => setShowModal(false)} onCreated={fetchElections} token={token} />}
+            {showModal && (
+                <NewElectionModal
+                    onClose={() => {
+                        setShowModal(false);
+                        setModalProcessKind('election');
+                    }}
+                    onCreated={fetchElections}
+                    token={token}
+                    initialProcessKind={modalProcessKind}
+                />
+            )}
 
             <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row">
                 {/* Sidebar */}
@@ -1413,6 +1488,14 @@ const ClientDashboard = () => {
                         >
                             <Sparkles size={18} /> Plaza Ciudadana
                         </Link>
+                        {user?.role === 'admin' && (
+                            <Link
+                                to="/admin-dashboard"
+                                className="w-full text-left flex items-center gap-3 px-4 py-3 rounded-xl font-medium text-amber-300 hover:bg-amber-500/10 hover:text-amber-200 transition-colors"
+                            >
+                                <ShieldCheck size={18} /> Panel Admin
+                            </Link>
+                        )}
                     </nav>
                     <div className="p-4 border-t border-slate-800">
                         <div className="flex items-center gap-3 px-2 mb-4">

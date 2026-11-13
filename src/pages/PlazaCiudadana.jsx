@@ -109,6 +109,18 @@ const PlazaCiudadana = () => {
         }
     });
 
+    const orgToken = localStorage.getItem('adminToken');
+    const orgUser = (() => {
+        try {
+            return JSON.parse(localStorage.getItem('adminUser') || '{}');
+        } catch {
+            return {};
+        }
+    })();
+    const isAuthenticated = Boolean(orgToken && orgUser?.email);
+    const createSurveyTarget = isAuthenticated ? '/dashboard?new=survey' : '/login?next=%2Fdashboard%3Fnew%3Dsurvey';
+    const panelTarget = orgUser?.role === 'admin' ? '/admin-dashboard' : '/dashboard';
+
     // Modal de respuesta
     const [respondingSurvey, setRespondingSurvey] = useState(null);
     const [selectedCandidateId, setSelectedCandidateId] = useState('');
@@ -386,9 +398,14 @@ const PlazaCiudadana = () => {
                             <ShieldCheck size={14} /> {web3Status.networkName}
                         </span>
                     )}
-                    <Link to="/login" className="text-xs font-bold text-slate-600 hover:text-blue-600 hidden sm:inline">
+                    <Link to={createSurveyTarget} className="text-xs font-bold text-slate-600 hover:text-blue-600 hidden sm:inline">
                         Crear Encuesta / Votación
                     </Link>
+                    {isAuthenticated && (
+                        <Link to={panelTarget} className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-colors hidden sm:inline">
+                            {orgUser?.role === 'admin' ? 'Panel Admin' : 'Mi Panel'}
+                        </Link>
+                    )}
                     <Link to="/" className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors">
                         Inicio
                     </Link>
@@ -548,7 +565,7 @@ const PlazaCiudadana = () => {
                                     </p>
                                 </div>
                                 <Link
-                                    to="/login"
+                                    to={createSurveyTarget}
                                     className="px-5 py-3 bg-white text-slate-900 rounded-xl font-bold text-sm hover:bg-slate-100 shrink-0"
                                 >
                                     Publicar Encuesta
@@ -604,7 +621,7 @@ const PlazaCiudadana = () => {
                                     <p className="text-sm text-slate-500 max-w-md mx-auto">
                                         Cuando una organización publique una encuesta ciudadana aparecerá aquí automáticamente.
                                     </p>
-                                    <Link to="/login" className="inline-flex items-center gap-2 px-5 py-2.5 bg-sky-500 text-white rounded-xl text-sm font-bold hover:bg-sky-600">
+                                    <Link to={createSurveyTarget} className="inline-flex items-center gap-2 px-5 py-2.5 bg-sky-500 text-white rounded-xl text-sm font-bold hover:bg-sky-600">
                                         Crear la primera encuesta <ArrowRight size={15} />
                                     </Link>
                                 </div>
@@ -1100,3 +1117,4 @@ const PlazaCiudadana = () => {
 };
 
 export default PlazaCiudadana;
+

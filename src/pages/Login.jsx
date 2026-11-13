@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { Lock, Mail, Loader2, User, Building2, ArrowLeft } from 'lucide-react';
 import axios from 'axios';
 import { API_URL } from '../config.js';
@@ -7,9 +7,73 @@ import { API_URL } from '../config.js';
 const inputClass = "w-full px-5 py-4 rounded-xl border border-slate-200 focus:ring-4 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none font-medium bg-slate-50 focus:bg-white text-slate-900 placeholder:text-slate-400";
 const labelClass = "text-sm font-bold text-slate-700 flex items-center gap-2 mb-2";
 
+const sanitizeNextPath = (rawNext) => {
+    if (!rawNext || typeof rawNext !== 'string') return '';
+    const trimmed = rawNext.trim();
+    if (!trimmed.startsWith('/') || trimmed.startsWith('//')) return '';
+    return trimmed;
+};
+
 const Login = () => {
     const [tab, setTab] = useState('login'); // 'login' | 'register'
+    const [searchParams] = useSearchParams();
     const navigate = useNavigate();
+    const nextPath = sanitizeNextPath(searchParams.get('next'));
+    const forceSwitch = searchParams.get('switch') === '1';
+
+    const resolveDestination = useCallback((user) => {
+        if (nextPath) return nextPath;
+        return user?.role === 'admin' ? '/admin-dashboard' : '/dashboard';
+    }, [nextPath]);
+
+    // ── EXISTING SESSION CHECK ──
+    const [checkingSession, setCheckingSession] = useState(() => !forceSwitch && Boolean(localStorage.getItem('adminToken')));
+
+    useEffect(() => {
+        const existingToken = localStorage.getItem('adminToken');
+        if (forceSwitch || !existingToken) {
+            return;
+        }
+
+        let cancelled = false;
+        axios
+            .get(`${API_URL}/api/auth/me`, { headers: { Authorization: `Bearer ${existingToken}` } })
+            .then((res) => {
+                if (cancelled) return;
+                const verifiedUser = res.data?.user;
+                if (verifiedUser) {
+                    localStorage.setItem('adminUser', JSON.stringify(verifiedUser));
+                    navigate(resolveDestination(verifiedUser), { replace: true });
+                } else {
+                    setCheckingSession(false);
+                }
+            })
+            .catch((err) => {
+                if (cancelled) return;
+                const status = err.response?.status;
+                if (status === 401 || status === 403) {
+                    localStorage.removeItem('adminToken');
+                    localStorage.removeItem('adminUser');
+                    setCheckingSession(false);
+                    return;
+                }
+                // Si el backend no responde temporalmente pero existe sesión local válida, permitir continuar
+                try {
+                    const cachedUser = JSON.parse(localStorage.getItem('adminUser') || '{}');
+                    if (cachedUser?.email) {
+                        navigate(resolveDestination(cachedUser), { replace: true });
+                        return;
+                    }
+                } catch {
+                    // ignore malformed cached user
+                }
+                setCheckingSession(false);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [forceSwitch, navigate, resolveDestination]);
 
     // ── LOGIN STATE ──
     const [loginData, setLoginData] = useState({ email: '', password: '' });
@@ -33,8 +97,7 @@ const Login = () => {
             localStorage.setItem('adminToken', token);
             localStorage.setItem('adminUser', JSON.stringify(user));
             setLoginStatus('success');
-            if (user.role === 'admin') navigate('/admin-dashboard');
-            else navigate('/dashboard');
+            navigate(resolveDestination(user), { replace: true });
         } catch (err) {
             setLoginStatus('error');
             setLoginError(err.response?.data?.message || 'Credenciales incorrectas. Inténtalo de nuevo.');
@@ -57,7 +120,7 @@ const Login = () => {
 
         setRegStatus('loading');
         try {
-            await axios.post(`${API_URL}/api/auth/register`, {
+            const res = await axios.post(`${API_URL}/api/auth/register`, {
                 username: regData.username,
                 email: regData.email,
                 password: regData.password,
@@ -65,13 +128,39 @@ const Login = () => {
                 role: 'organizer',
             });
             setRegStatus('success');
-            setRegSuccess('¡Cuenta creada exitosamente! Ya puedes iniciar sesión.');
-            setTimeout(() => setTab('login'), 2500);
+            const { token, user } = res.data || {};
+            if (token && user) {
+                localStorage.setItem('adminToken', token);
+                localStorage.setItem('adminUser', JSON.stringify(user));
+                setRegSuccess('¡Cuenta creada exitosamente! Ingresando a tu panel...');
+                navigate(resolveDestination(user), { replace: true });
+            } else {
+                setRegSuccess('¡Cuenta creada exitosamente! Ya puedes iniciar sesión.');
+                setTimeout(() => setTab('login'), 1800);
+            }
         } catch (err) {
             setRegStatus('error');
             setRegError(err.response?.data?.message || 'Error al crear la cuenta. El correo ya puede estar registrado.');
         }
     };
+
+    if (checkingSession) {
+        return (
+            <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+                <div className="bg-white rounded-3xl max-w-sm w-full shadow-xl border border-slate-100 p-8 text-center space-y-4">
+                    <Loader2 className="animate-spin text-blue-600 mx-auto" size={32} />
+                    <p className="font-bold text-slate-800">Verificando sesión activa...</p>
+                    <button
+                        type="button"
+                        onClick={() => setCheckingSession(false)}
+                        className="text-xs font-semibold text-blue-600 hover:underline"
+                    >
+                        Cambiar de cuenta
+                    </button>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 relative overflow-hidden">
@@ -226,9 +315,13 @@ const Login = () => {
                 </div>
 
                 {/* Footer back link */}
-                <div className="px-8 pb-6 text-center">
-                    <Link to="/" className="text-xs text-slate-400 hover:text-slate-600 transition-colors flex items-center justify-center gap-1">
+                <div className="px-8 pb-6 flex items-center justify-center gap-4 text-xs text-slate-400">
+                    <Link to="/" className="hover:text-slate-600 transition-colors flex items-center gap-1">
                         <ArrowLeft size={12} /> Volver al inicio
+                    </Link>
+                    <span>·</span>
+                    <Link to="/plaza" className="hover:text-sky-600 transition-colors font-semibold">
+                        Plaza Ciudadana
                     </Link>
                 </div>
             </div>
