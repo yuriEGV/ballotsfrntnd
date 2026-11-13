@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
     CheckCircle, User, Info, Loader2, ChevronRight,
-    ShieldCheck, Lock, AlertTriangle, FileText
+    ShieldCheck, Lock, AlertTriangle, FileText, XCircle, ExternalLink, Copy, Check
 } from 'lucide-react';
 import axios from 'axios';
 import { API_URL } from '../config.js';
@@ -17,6 +17,8 @@ const VotingBooth = () => {
     const [selectedCandidate, setSelectedCandidate] = useState(null);
     const [submitting, setSubmitting] = useState(false);
     const [voted, setVoted] = useState(false);
+    const [voteReceipt, setVoteReceipt] = useState(null);
+    const [copiedHash, setCopiedHash] = useState(false);
     const [error, setError] = useState('');
 
     useEffect(() => {
@@ -32,7 +34,6 @@ const VotingBooth = () => {
             setVoter(voterData);
 
             try {
-                // Fetch fresh election data from API to ensure candidates are loaded
                 const res = await axios.get(`${API_URL}/api/elections/${electionId}`);
                 setElection(res.data.data);
             } catch (err) {
@@ -52,7 +53,7 @@ const VotingBooth = () => {
 
         try {
             const token = localStorage.getItem('voterToken');
-            await axios.post(`${API_URL}/api/ballots`, {
+            const res = await axios.post(`${API_URL}/api/ballots`, {
                 candidateId: selectedCandidate === 'blank' || selectedCandidate === 'nulo' ? null : selectedCandidate._id,
                 electionId: electionId,
                 isNulo: selectedCandidate === 'nulo'
@@ -60,6 +61,7 @@ const VotingBooth = () => {
                 headers: { Authorization: `Bearer ${token}` }
             });
 
+            setVoteReceipt(res.data?.data || null);
             setVoted(true);
             localStorage.removeItem('voterToken');
             localStorage.removeItem('voterInfo');
@@ -69,6 +71,13 @@ const VotingBooth = () => {
         } finally {
             setSubmitting(false);
         }
+    };
+
+    const copyReceiptCommitment = () => {
+        if (!voteReceipt?.ballotCommitment) return;
+        navigator.clipboard.writeText(voteReceipt.ballotCommitment);
+        setCopiedHash(true);
+        setTimeout(() => setCopiedHash(false), 2500);
     };
 
     if (loading) return (
@@ -81,13 +90,60 @@ const VotingBooth = () => {
         <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
             <div className="bg-white rounded-[2rem] p-8 md:p-12 max-w-lg w-full text-center shadow-2xl relative overflow-hidden">
                 <div className="absolute top-0 left-0 w-full h-2 bg-emerald-500" />
-                <div className="w-24 h-24 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-8 shadow-inner">
+                <div className="w-24 h-24 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-6 shadow-inner">
                     <CheckCircle size={48} />
                 </div>
-                <h2 className="text-3xl font-black text-slate-900 mb-4">¡Voto Recibido!</h2>
-                <p className="text-slate-500 mb-8 font-medium leading-relaxed">
-                    Tu participación ha sido registrada con éxito. Recibirás un correo electrónico con el comprobante y código único de votación pronto.
+                <h2 className="text-3xl font-black text-slate-900 mb-3">¡Voto Recibido!</h2>
+                <p className="text-slate-500 mb-6 font-medium leading-relaxed text-sm">
+                    Tu voto fue sellado criptográficamente sin exponer tu identidad ni tu preferencia en la blockchain.
                 </p>
+
+                {voteReceipt && (
+                    <div className="bg-slate-900 text-left rounded-2xl p-5 mb-6 space-y-3 border border-slate-800">
+                        <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                                Comprobante Criptográfico (Commitment)
+                            </span>
+                            <button
+                                type="button"
+                                onClick={copyReceiptCommitment}
+                                className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1 font-bold"
+                            >
+                                {copiedHash ? <><Check size={13} /> Copiado</> : <><Copy size={13} /> Copiar</>}
+                            </button>
+                        </div>
+                        <p className="font-mono text-[11px] text-emerald-400 break-all bg-slate-950/70 p-2.5 rounded-lg">
+                            {voteReceipt.ballotCommitment}
+                        </p>
+
+                        {voteReceipt.web3?.anchored ? (
+                            <div className="pt-2 border-t border-slate-800 space-y-2">
+                                <div className="flex items-center justify-between text-xs">
+                                    <span className="text-emerald-400 font-bold">⛓️ Anclado On-Chain</span>
+                                    <span className="text-slate-400">{voteReceipt.web3.network} · Bloque #{voteReceipt.web3.blockNumber}</span>
+                                </div>
+                                <p className="font-mono text-[11px] text-blue-300 break-all">
+                                    TX: {voteReceipt.web3.txHash}
+                                </p>
+                                {voteReceipt.web3.explorerUrl && (
+                                    <a
+                                        href={voteReceipt.web3.explorerUrl}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="w-full mt-2 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-colors"
+                                    >
+                                        Verificar en Explorador Blockchain <ExternalLink size={14} />
+                                    </a>
+                                )}
+                            </div>
+                        ) : (
+                            <p className="text-[11px] text-amber-300 pt-1">
+                                Comprobante sellado con hash local ({voteReceipt.hash?.slice(0, 18)}...).
+                            </p>
+                        )}
+                    </div>
+                )}
+
                 <button
                     onClick={() => navigate('/')}
                     className="w-full py-4 bg-slate-900 text-white rounded-2xl font-bold hover:bg-slate-800 transition-all shadow-xl shadow-slate-900/20"
@@ -110,7 +166,7 @@ const VotingBooth = () => {
                             <Lock size={14} /> Cabina de Votación Segura
                         </div>
                         <h1 className="text-4xl font-black text-slate-900 tracking-tight">{election?.title}</h1>
-                        <p className="text-slate-500 font-medium">Eleccion oficial de Einsoft Ballots</p>
+                        <p className="text-slate-500 font-medium">Elección oficial de Einsoft Ballots</p>
                     </div>
 
                     <div className="bg-white border border-slate-200 px-4 py-3 rounded-2xl shadow-sm flex items-center gap-3">
@@ -120,6 +176,9 @@ const VotingBooth = () => {
                         <div>
                             <p className="text-xs text-slate-400 font-bold uppercase">Votante Identificado</p>
                             <p className="text-sm font-bold text-slate-700">{voter?.name}</p>
+                            {election?.settings?.weightedVoting && (
+                                <p className="text-[11px] font-bold text-indigo-600">Ponderación: {voter?.weight || 1}</p>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -237,7 +296,7 @@ const VotingBooth = () => {
                         </div>
                         <div>
                             <h3 className="text-2xl font-black text-slate-900">Confirmación de Voto</h3>
-                            <p className="text-slate-500 font-medium">Tu elección será encriptada antes del envío.</p>
+                            <p className="text-slate-500 font-medium">Tu elección será sellada criptográficamente antes del envío.</p>
                         </div>
                     </div>
 
@@ -265,7 +324,7 @@ const VotingBooth = () => {
 
                 <div className="text-center">
                     <p className="text-xs text-slate-400 font-bold uppercase tracking-widest flex items-center justify-center gap-2">
-                        Sistema de Votación Einsoft · Tecnología Blockchain Demo · 2026
+                        Sistema de Votación Einsoft · Respaldo Criptográfico Web3 · 2026
                     </p>
                 </div>
             </div>
@@ -274,3 +333,4 @@ const VotingBooth = () => {
 };
 
 export default VotingBooth;
+

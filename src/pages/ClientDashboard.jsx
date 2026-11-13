@@ -711,6 +711,19 @@ const ConfigView = ({ user, elections, token, onRefresh, handlePayment }) => {
                                         <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
                                     </label>
                                 </div>
+                                <div className="flex items-center justify-between p-4 bg-white rounded-xl border border-slate-200">
+                                    <div>
+                                        <p className="font-bold text-slate-800 text-sm">Doble Factor por Correo (Clave 6 dígitos)</p>
+                                        <p className="text-xs text-slate-500 font-medium">Exige código OTP enviado al email registrado antes de entrar a la urna (si el votante tiene correo).</p>
+                                    </div>
+                                    <label className="relative inline-flex items-center cursor-pointer">
+                                        <input type="checkbox" className="sr-only peer"
+                                            checked={Boolean(form.settings?.requireVotingKey)}
+                                            onChange={e => setForm({ ...form, settings: { ...form.settings, requireVotingKey: e.target.checked } })}
+                                        />
+                                        <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
+                                    </label>
+                                </div>
                             </div>
 
                             {/* Candidates */}
@@ -1112,42 +1125,83 @@ const ClientDashboard = () => {
                             </div>
                         </div>
                         <div className="p-8 overflow-y-auto space-y-8 flex-1 bg-slate-50/50 print-content">
-                            <div className="flex items-center justify-between p-6 bg-emerald-50 border border-emerald-100 rounded-3xl">
-                                <div className="flex items-center gap-3 text-emerald-700">
-                                    <Activity className="animate-pulse" size={24} />
+                            <div className={`flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-6 rounded-3xl border ${auditLog.chainIntegrity ? 'bg-emerald-50 border-emerald-200' : 'bg-red-50 border-red-200'}`}>
+                                <div className={`flex items-center gap-3 ${auditLog.chainIntegrity ? 'text-emerald-700' : 'text-red-700'}`}>
+                                    <Activity className="animate-pulse shrink-0" size={24} />
                                     <div>
-                                        <p className="font-black text-lg">Estado del Ledger: ÍNTEGRO</p>
-                                        <p className="text-sm font-medium opacity-80">Todos los hashes han sido validados matemáticamente.</p>
+                                        <p className="font-black text-lg">
+                                            {auditLog.chainIntegrity ? 'Estado del Ledger: ÍNTEGRO' : 'ALERTA: INTEGRIDAD COMPROMETIDA'}
+                                        </p>
+                                        <p className="text-sm font-medium opacity-80">
+                                            {auditLog.chainIntegrity
+                                                ? (auditLog.onChain?.registered
+                                                    ? `Verificado matemáticamente y sincronizado con Smart Contract (${auditLog.onChain.networkName}).`
+                                                    : 'Commitments y hashes locales validados matemáticamente.')
+                                                : 'Se detectó una alteración o inconsistencia en la cadena de votos.'}
+                                        </p>
                                     </div>
                                 </div>
-                                <div className="px-5 py-2 bg-white rounded-xl text-emerald-600 font-bold text-sm shadow-sm border border-emerald-100">
-                                    {auditLog.totalVotes} Votos Encadenados
+                                <div className="px-5 py-2 bg-white rounded-xl font-bold text-sm shadow-sm border border-slate-200 text-slate-700 shrink-0">
+                                    {auditLog.totalVotes} Votos · {auditLog.anchoredVotesCount || 0} On-Chain
                                 </div>
                             </div>
+                            {auditLog.onChain?.contractAddress && (
+                                <div className="bg-slate-900 text-slate-200 p-5 rounded-2xl text-xs font-mono space-y-1.5">
+                                    <div className="flex justify-between flex-wrap gap-2">
+                                        <span className="text-slate-400">Red / Smart Contract:</span>
+                                        <span className="text-emerald-400 font-bold">{auditLog.onChain.networkName} · {auditLog.onChain.contractAddress}</span>
+                                    </div>
+                                    <div className="flex justify-between flex-wrap gap-2">
+                                        <span className="text-slate-400">On-Chain Tip:</span>
+                                        <span className="text-blue-300 break-all">{auditLog.onChain.chainTip}</span>
+                                    </div>
+                                    {auditLog.tallyRoot && (
+                                        <div className="flex justify-between flex-wrap gap-2">
+                                            <span className="text-slate-400">Merkle Tally Root:</span>
+                                            <span className="text-indigo-300 break-all">{auditLog.tallyRoot}</span>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                             <div className="space-y-4">
                                 {auditLog.auditTrail.map((vote, i) => (
                                     <div key={i} className="relative pl-12">
                                         {i < auditLog.auditTrail.length - 1 && (
                                             <div className="absolute left-[19px] top-6 bottom-[-24px] w-1 bg-indigo-200 rounded-full" />
                                         )}
-                                        <div className="absolute left-0 top-0 w-10 h-10 bg-white border-2 border-indigo-600 rounded-full flex items-center justify-center z-10 shadow-sm">
-                                            <p className="text-xs font-black text-indigo-600">#{i + 1}</p>
+                                        <div className={`absolute left-0 top-0 w-10 h-10 bg-white border-2 rounded-full flex items-center justify-center z-10 shadow-sm ${vote.isValid ? 'border-indigo-600' : 'border-red-600'}`}>
+                                            <p className={`text-xs font-black ${vote.isValid ? 'text-indigo-600' : 'text-red-600'}`}>#{i + 1}</p>
                                         </div>
                                         <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-                                            <div className="flex justify-between items-start mb-4">
-                                                <p className="text-lg font-bold text-slate-900">{vote.candidateName}</p>
+                                            <div className="flex justify-between items-start mb-4 gap-2 flex-wrap">
+                                                <div className="flex items-center gap-2">
+                                                    <p className="text-lg font-bold text-slate-900">{vote.candidateName}</p>
+                                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${vote.anchored ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'}`}>
+                                                        {vote.anchored ? 'On-Chain' : 'Off-Chain'}
+                                                    </span>
+                                                </div>
                                                 <p className="text-xs text-slate-400 font-medium">{new Date(vote.timestamp).toLocaleString('es-CL')}</p>
                                             </div>
                                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                                 <div className="space-y-1">
-                                                    <p className="text-[10px] font-bold text-slate-400 uppercase">Hash Actual</p>
+                                                    <p className="text-[10px] font-bold text-slate-400 uppercase">Hash Actual (Chain Tip)</p>
                                                     <p className="text-[11px] font-mono text-indigo-600 break-all bg-slate-50 p-2 rounded-lg">{vote.hash}</p>
                                                 </div>
                                                 <div className="space-y-1">
-                                                    <p className="text-[10px] font-bold text-slate-400 uppercase">Hash Anterior</p>
-                                                    <p className="text-[11px] font-mono text-slate-500 break-all bg-slate-50 p-2 rounded-lg">{vote.previousHash}</p>
+                                                    <p className="text-[10px] font-bold text-slate-400 uppercase">Ballot Commitment (Zero-PII)</p>
+                                                    <p className="text-[11px] font-mono text-slate-600 break-all bg-slate-50 p-2 rounded-lg">{vote.ballotCommitment || vote.previousHash}</p>
                                                 </div>
                                             </div>
+                                            {vote.txHash && (
+                                                <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between gap-2 flex-wrap text-xs">
+                                                    <span className="font-mono text-slate-500 break-all">TX: {vote.txHash}</span>
+                                                    {vote.explorerUrl && (
+                                                        <a href={vote.explorerUrl} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline font-bold flex items-center gap-1">
+                                                            Ver en Explorador <ExternalLink size={12} />
+                                                        </a>
+                                                    )}
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 ))}

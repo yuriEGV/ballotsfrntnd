@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { LockKeyhole, Fingerprint, ShieldCheck, Loader2 } from 'lucide-react';
+import React, { useState } from 'react';
+import { useParams } from 'react-router-dom';
+import { LockKeyhole, Fingerprint, ShieldCheck, Loader2, KeyRound } from 'lucide-react';
 import axios from 'axios';
 import { API_URL } from '../config.js';
 
@@ -15,17 +15,16 @@ const civicQuotes = [
 
 const VotingGateway = () => {
     const { electionId } = useParams();
-    const navigate = useNavigate();
 
     const [cedula, setCedula] = useState('');
+    const [votingKey, setVotingKey] = useState('');
+    const [requiresOtp, setRequiresOtp] = useState(false);
     const [status, setStatus] = useState('idle');
     const [errorMsg, setErrorMsg] = useState('');
-    const [randomQuote, setRandomQuote] = useState(civicQuotes[0]);
-
-    useEffect(() => {
+    const [randomQuote] = useState(() => {
         const randomIndex = Math.floor(Math.random() * civicQuotes.length);
-        setRandomQuote(civicQuotes[randomIndex]);
-    }, []);
+        return civicQuotes[randomIndex];
+    });
 
     const handleLogin = async (e) => {
         e.preventDefault();
@@ -35,14 +34,24 @@ const VotingGateway = () => {
         setErrorMsg('');
 
         try {
-            const res = await axios.post(`${API_URL}/api/voters/auth`, {
+            const payload = {
                 electionId,
                 cedula: cedula.trim()
-            });
+            };
+            if (requiresOtp && votingKey.trim()) {
+                payload.votingKey = votingKey.trim();
+            }
+
+            const res = await axios.post(`${API_URL}/api/voters/auth`, payload);
+
+            if (res.data?.requiresVotingKey) {
+                setRequiresOtp(true);
+                setStatus('idle');
+                return;
+            }
 
             const { token, voter, election } = res.data.data;
 
-            // Store token securely
             localStorage.setItem('voterToken', token);
             localStorage.setItem('voterInfo', JSON.stringify(voter));
             localStorage.setItem('electionInfo', JSON.stringify(election));
@@ -54,9 +63,11 @@ const VotingGateway = () => {
             const msg = err.response?.data?.message || 'Error al validar identidad';
 
             if (err.response?.status === 401) {
-                setErrorMsg('El RUT ingresado no se encuentra en el padrón de esta elección. Por favor, verifica los datos o contacta al organizador.');
+                setErrorMsg(requiresOtp
+                    ? 'Código de verificación incorrecto o expirado.'
+                    : 'El RUT ingresado no se encuentra en el padrón de esta elección. Por favor, verifica los datos o contacta al organizador.');
             } else if (err.response?.status === 403) {
-                setErrorMsg('Este RUT ya ha registrado su voto para esta elección.');
+                setErrorMsg(err.response?.data?.message || 'Este RUT ya ha registrado su voto para esta elección.');
             } else if (err.response?.status === 404) {
                 setErrorMsg('La elección no existe o ya no se encuentra activa.');
             } else {
@@ -73,14 +84,14 @@ const VotingGateway = () => {
                         <ShieldCheck size={40} />
                     </div>
                     <h2 className="text-2xl font-bold text-white mb-2">Identidad Validada</h2>
-                    <p className="text-slate-400 mb-8">El sistema ha encriptado tu conexión de forma segura.</p>
+                    <p className="text-slate-400 mb-8">Tu sesión criptográfica de voto único está lista.</p>
                     <button
                         onClick={() => window.location.href = `/booth/${electionId}`}
                         className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold transition-all shadow-lg shadow-emerald-600/30">
                         Ingresar a la Urna
                     </button>
                     <button
-                        onClick={() => setStatus('idle')}
+                        onClick={() => { setStatus('idle'); setRequiresOtp(false); setVotingKey(''); }}
                         className="w-full mt-4 py-2 text-slate-500 hover:text-slate-300 text-sm font-bold transition-all">
                         ← Volver
                     </button>
@@ -91,7 +102,6 @@ const VotingGateway = () => {
 
     return (
         <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 relative overflow-hidden">
-            {/* Abstract Background */}
             <div className="absolute top-0 right-0 w-full h-full overflow-hidden -z-10 pointer-events-none">
                 <div className="absolute top-[-20%] right-[-10%] w-[600px] h-[600px] rounded-full bg-blue-500/5 blur-[120px]" />
                 <div className="absolute bottom-[-20%] left-[-10%] w-[600px] h-[600px] rounded-full bg-indigo-500/5 blur-[120px]" />
@@ -119,19 +129,40 @@ const VotingGateway = () => {
                             <input
                                 required
                                 type="text"
+                                disabled={requiresOtp}
                                 value={cedula}
                                 onChange={(e) => setCedula(e.target.value)}
-                                className="w-full px-5 py-4 rounded-xl border border-slate-200 focus:ring-4 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none font-medium text-lg text-center tracking-widest bg-slate-50 focus:bg-white"
+                                className="w-full px-5 py-4 rounded-xl border border-slate-200 focus:ring-4 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none font-medium text-lg text-center tracking-widest bg-slate-50 focus:bg-white disabled:opacity-70"
                                 placeholder="12.345.678-9"
                             />
                         </div>
 
+                        {requiresOtp && (
+                            <div className="space-y-2">
+                                <label className="text-sm font-bold text-slate-700 flex justify-between items-center">
+                                    Clave de Votación (6 dígitos enviada a tu correo)
+                                    <KeyRound className="text-emerald-500 w-4 h-4" />
+                                </label>
+                                <input
+                                    required
+                                    type="text"
+                                    maxLength={6}
+                                    value={votingKey}
+                                    onChange={(e) => setVotingKey(e.target.value)}
+                                    className="w-full px-5 py-4 rounded-xl border border-emerald-300 focus:ring-4 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all outline-none font-mono font-bold text-2xl text-center tracking-[0.5em] bg-emerald-50/40"
+                                    placeholder="000000"
+                                />
+                            </div>
+                        )}
+
                         <button
                             type="submit"
-                            disabled={status === 'loading' || !cedula}
+                            disabled={status === 'loading' || !cedula || (requiresOtp && votingKey.trim().length < 6)}
                             className="w-full py-4 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold transition-all shadow-xl shadow-slate-900/20 flex justify-center items-center gap-2 group disabled:opacity-70 disabled:hover:bg-slate-900"
                         >
-                            {status === 'loading' ? <Loader2 className="animate-spin" /> : 'Validar Identidad'}
+                            {status === 'loading'
+                                ? <Loader2 className="animate-spin" />
+                                : requiresOtp ? 'Verificar Clave e Ingresar' : 'Validar Identidad'}
                         </button>
 
                         {errorMsg && (
@@ -149,12 +180,11 @@ const VotingGateway = () => {
 
                     <div className="mt-8 text-center border-t border-slate-100 pt-6">
                         <p className="text-xs text-slate-400 font-medium flex items-center justify-center gap-1">
-                            <ShieldCheck className="w-4 h-4" /> Conexión encriptada end-to-end
+                            <ShieldCheck className="w-4 h-4" /> Respaldo Criptográfico y Privacidad Web3
                         </p>
                     </div>
                 </div>
 
-                {/* Civic Quote */}
                 <div className="text-center px-6">
                     <p className="text-slate-500 italic text-sm font-medium">"{randomQuote.text}"</p>
                     <p className="text-slate-400 text-xs font-semibold mt-1">- {randomQuote.author}</p>
@@ -165,3 +195,4 @@ const VotingGateway = () => {
 };
 
 export default VotingGateway;
+

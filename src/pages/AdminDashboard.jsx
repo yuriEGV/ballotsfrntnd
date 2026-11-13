@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
     ShieldAlert, Activity, Users, LogOut, CheckCircle, XCircle, ShieldCheck,
     Clock, Eye, Mail, FileText, Printer, RefreshCw, UserX, AlertTriangle, ClipboardList,
-    Ticket, Trash2, Plus
+    Ticket, Trash2, Plus, ExternalLink
 } from 'lucide-react';
 import axios from 'axios';
 import { API_URL } from '../config.js';
@@ -584,17 +584,43 @@ const AdminDashboard = () => {
                 <div className="fixed inset-0 bg-slate-900/80 backdrop-blur-md z-[110] flex items-center justify-center p-4">
                     <div className="bg-white rounded-[2.5rem] w-full max-w-4xl shadow-2xl relative flex flex-col max-h-[90vh]">
                         <div className="p-8 border-b border-slate-200 flex justify-between items-center">
-                            <h2 className="text-2xl font-black text-slate-900">Auditoría Blockchain</h2>
+                            <div>
+                                <h2 className="text-2xl font-black text-slate-900">Auditoría Web3</h2>
+                                <p className={`text-xs font-bold mt-1 ${auditLog.chainIntegrity ? 'text-emerald-600' : 'text-red-600'}`}>
+                                    {auditLog.chainIntegrity ? '✔ Integridad Verificada' : '✖ Integridad Comprometida'} · {auditLog.anchoredVotesCount || 0}/{auditLog.totalVotes} votos on-chain
+                                </p>
+                            </div>
                             <button onClick={() => setShowingAudit(false)} className="p-3 bg-slate-100 hover:bg-slate-200 text-slate-500 rounded-xl">
                                 <XCircle size={24} />
                             </button>
                         </div>
                         <div className="p-8 overflow-y-auto space-y-4 flex-1">
+                            {auditLog.onChain?.contractAddress && (
+                                <div className="bg-slate-900 text-slate-200 p-4 rounded-2xl text-xs font-mono space-y-1">
+                                    <p>Red: <span className="text-emerald-400">{auditLog.onChain.networkName}</span> · Contrato: {auditLog.onChain.contractAddress}</p>
+                                    <p className="break-all">Chain Tip On-Chain: {auditLog.onChain.chainTip}</p>
+                                </div>
+                            )}
                             {(auditLog.auditTrail || []).map((vote, i) => (
-                                <div key={i} className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
-                                    <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Paso #{i + 1}</p>
-                                    <p className="text-sm font-mono text-indigo-600 break-all">{vote.hash}</p>
-                                    <p className="text-[10px] text-slate-400 mt-1">Anterior: {vote.previousHash}</p>
+                                <div key={i} className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-1.5">
+                                    <div className="flex justify-between items-center">
+                                        <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">Paso #{i + 1} · {vote.candidateName}</p>
+                                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${vote.anchored ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'}`}>
+                                            {vote.anchored ? 'Anclado On-Chain' : 'Local'}
+                                        </span>
+                                    </div>
+                                    <p className="text-xs font-mono text-indigo-600 break-all">Tip: {vote.hash}</p>
+                                    <p className="text-[11px] font-mono text-slate-500 break-all">Commitment: {vote.ballotCommitment || vote.previousHash}</p>
+                                    {vote.txHash && (
+                                        <div className="flex justify-between items-center pt-1 text-xs">
+                                            <span className="font-mono text-slate-500 break-all">TX: {vote.txHash}</span>
+                                            {vote.explorerUrl && (
+                                                <a href={vote.explorerUrl} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline font-bold flex items-center gap-1 shrink-0">
+                                                    Explorador <ExternalLink size={12} />
+                                                </a>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                             ))}
                         </div>
