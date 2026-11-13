@@ -1,13 +1,21 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
     Search, PlusCircle, CheckCircle, Clock, Activity, ChevronRight,
     RefreshCw, Loader2, Users, UserCheck, UserX, AlertCircle, Save,
-    Trash2, Image as ImageIcon, Plus, Link2, Copy, ExternalLink,
-    LogOut, Upload, X, Settings, ShieldCheck, FileText, Printer, XCircle, CreditCard
+    Trash2, Plus, Link2, Copy, ExternalLink, MessageSquareText, Vote,
+    LogOut, Upload, X, Settings, ShieldCheck, FileText, Printer, XCircle, CreditCard, Sparkles, BarChart3
 } from 'lucide-react';
 import { useNavigate, Link } from 'react-router-dom';
 import axios from 'axios';
 import { API_URL } from '../config.js';
+import {
+    PRICING_CATALOG,
+    ELECTION_EVENT_TYPES,
+    SURVEY_EVENT_TYPES,
+    SURVEY_CATEGORIES,
+    calculateProcessPricing,
+    formatCLP
+} from '../utils/pricing.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const initials = (name = '') =>
@@ -17,54 +25,112 @@ const inputClass = "w-full px-4 py-3 rounded-xl border border-slate-200 focus:ri
 
 const statusMap = {
     active: { label: 'Activa', dot: 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]', btn: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200', btnLabel: 'Ver' },
-    draft: { label: 'Pendiente', dot: 'bg-amber-400', btn: 'bg-amber-100 text-amber-700 hover:bg-amber-200', btnLabel: 'Configurar' },
-    ended: { label: 'Finalizada', dot: 'bg-slate-300', btn: 'bg-slate-100 text-slate-600 hover:bg-slate-200', btnLabel: 'Auditoría' },
+    draft: { label: 'Borrador / Pendiente', dot: 'bg-amber-400', btn: 'bg-amber-100 text-amber-700 hover:bg-amber-200', btnLabel: 'Configurar' },
+    ended: { label: 'Finalizada', dot: 'bg-slate-300', btn: 'bg-slate-100 text-slate-600 hover:bg-slate-200', btnLabel: 'Configurar' },
 };
 
-const EVENT_TYPES = [
-    'Sindicatos', 'Asociaciones', 'Juntas de Vecinos', 'Copropiedades',
-    'Empresas', 'Colegios', 'Comité Paritario', 'Directiva',
-    'Negociación Colectiva', 'Votación de Censura',
-    'Cambio de Caja de Compensación', 'Reforma de Estatutos',
-    'Afiliación a Federación', 'Consultas', 'Otro'
-];
+const ALL_EVENT_TYPES = Array.from(new Set([...ELECTION_EVENT_TYPES, ...SURVEY_EVENT_TYPES]));
 
-// ── New Election Modal ──────────────────────────────────────────────────────
+const createEmptyQuestion = () => ({
+    prompt: '',
+    allowMultiple: false,
+    options: [{ label: '' }, { label: '' }]
+});
+
+// ── New Election / Survey Modal ─────────────────────────────────────────────
 const NewElectionModal = ({ onClose, onCreated, token }) => {
     const [form, setForm] = useState({
-        title: '', description: '', electionType: '',
-        startDate: '', endDate: '', candidates: [],
+        processKind: 'election',
+        title: '',
+        description: '',
+        electionType: '',
+        startDate: '',
+        endDate: '',
+        candidates: [],
+        questions: [],
         votersCount: 100,
-        modules: { virtualAssembly: false, technicalSupport: false },
+        modules: {
+            virtualAssembly: false,
+            technicalSupport: false,
+            fullAuditPackage: false
+        },
+        plaza: {
+            featuredInPlaza: false,
+            category: SURVEY_CATEGORIES[0],
+            rewardPoints: 50
+        },
+        settings: {
+            allowAutoRegistration: false
+        },
         couponCode: ''
     });
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState('');
-    const [step, setStep] = useState(1); // 1 = info, 2 = cand, 3 = pago
+    const [step, setStep] = useState(1); // 1 = info, 2 = candidates/questions, 3 = payment
+
+    const isSurvey = form.processKind === 'survey';
+    const availableEventTypes = isSurvey ? SURVEY_EVENT_TYPES : ELECTION_EVENT_TYPES;
+
+    const handleProcessKindChange = (kind) => {
+        setForm((f) => ({
+            ...f,
+            processKind: kind,
+            electionType: '',
+            questions: kind === 'survey' && f.questions.length === 0 ? [createEmptyQuestion()] : f.questions,
+            plaza: {
+                ...f.plaza,
+                featuredInPlaza: kind === 'survey' ? true : false
+            },
+            settings: {
+                ...f.settings,
+                allowAutoRegistration: kind === 'survey'
+            }
+        }));
+    };
 
     const addCandidate = () => setForm(f => ({ ...f, candidates: [...f.candidates, { name: '', description: '', imageUrl: '' }] }));
     const updCand = (i, field, val) => setForm(f => { const c = [...f.candidates]; c[i] = { ...c[i], [field]: val }; return { ...f, candidates: c }; });
     const delCand = (i) => setForm(f => ({ ...f, candidates: f.candidates.filter((_, idx) => idx !== i) }));
 
-    const [price, setPrice] = useState(0);
+    const addQuestion = () => setForm(f => ({ ...f, questions: [...f.questions, createEmptyQuestion()] }));
+    const updateQuestion = (qIdx, field, val) => setForm(f => {
+        const next = [...f.questions];
+        next[qIdx] = { ...next[qIdx], [field]: val };
+        return { ...f, questions: next };
+    });
+    const removeQuestion = (qIdx) => setForm(f => ({
+        ...f,
+        questions: f.questions.filter((_, idx) => idx !== qIdx)
+    }));
+    const addOption = (qIdx) => setForm(f => {
+        const next = [...f.questions];
+        next[qIdx] = { ...next[qIdx], options: [...(next[qIdx].options || []), { label: '' }] };
+        return { ...f, questions: next };
+    });
+    const updateOption = (qIdx, optIdx, val) => setForm(f => {
+        const next = [...f.questions];
+        const opts = [...(next[qIdx].options || [])];
+        opts[optIdx] = { ...opts[optIdx], label: val };
+        next[qIdx] = { ...next[qIdx], options: opts };
+        return { ...f, questions: next };
+    });
+    const removeOption = (qIdx, optIdx) => setForm(f => {
+        const next = [...f.questions];
+        next[qIdx] = { ...next[qIdx], options: (next[qIdx].options || []).filter((_, idx) => idx !== optIdx) };
+        return { ...f, questions: next };
+    });
+
     const [discount, setDiscount] = useState(0);
     const [validatingCoupon, setValidatingCoupon] = useState(false);
     const [couponApplied, setCouponApplied] = useState(false);
 
-    useEffect(() => {
-        let base = 50000;
-        const vCount = parseInt(form.votersCount) || 0;
-        if (vCount <= 100) base += vCount * 500;
-        else if (vCount <= 500) base += vCount * 400;
-        else if (vCount <= 2000) base += vCount * 300;
-        else base += vCount * 200;
-
-        if (form.modules.virtualAssembly) base += 150000;
-        if (form.modules.technicalSupport) base += 100000;
-
-        if (form.electionType === 'Colegios') base = 0; // Simplified for UI, server validates complex logic
-        setPrice(base);
-    }, [form.votersCount, form.modules, form.electionType]);
+    const pricing = useMemo(() => calculateProcessPricing({
+        processKind: form.processKind,
+        votersCount: form.votersCount,
+        modules: form.modules,
+        discountPercentage: discount,
+        freeSchoolBenefit: form.processKind === 'election' && form.electionType === 'Colegios'
+    }), [form.processKind, form.electionType, form.votersCount, form.modules, discount]);
 
     const handleValidateCoupon = async () => {
         if (!form.couponCode) return;
@@ -80,12 +146,30 @@ const NewElectionModal = ({ onClose, onCreated, token }) => {
         } finally { setValidatingCoupon(false); }
     };
 
-    const discountedPrice = price - (price * discount / 100);
-
     const handleSubmit = async (e) => {
         e.preventDefault(); setError(''); setSaving(true);
         try {
-            const res = await axios.post(`${API_URL}/api/elections`, form, { headers: { Authorization: `Bearer ${token}` } });
+            const cleanedQuestions = (form.questions || [])
+                .map((q) => ({
+                    prompt: String(q.prompt || '').trim(),
+                    allowMultiple: Boolean(q.allowMultiple),
+                    options: (q.options || [])
+                        .map((o) => ({ label: String(o.label || '').trim() }))
+                        .filter((o) => o.label)
+                }))
+                .filter((q) => q.prompt && q.options.length > 0);
+
+            const payload = {
+                ...form,
+                questions: isSurvey ? cleanedQuestions : [],
+                plaza: {
+                    featuredInPlaza: Boolean(form.plaza.featuredInPlaza),
+                    category: form.plaza.category || 'Actualidad',
+                    rewardPoints: Number(form.plaza.rewardPoints) || 50
+                }
+            };
+
+            const res = await axios.post(`${API_URL}/api/elections`, payload, { headers: { Authorization: `Bearer ${token}` } });
             const election = res.data.data;
 
             if (!election.isPaid) {
@@ -100,7 +184,7 @@ const NewElectionModal = ({ onClose, onCreated, token }) => {
             }
 
             onCreated(); onClose();
-        } catch (err) { setError(err.response?.data?.error || 'Error al crear la elección.'); }
+        } catch (err) { setError(err.response?.data?.error || 'Error al crear la solicitud.'); }
         finally { setSaving(false); }
     };
 
@@ -109,9 +193,15 @@ const NewElectionModal = ({ onClose, onCreated, token }) => {
             <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl max-h-[90vh] flex flex-col">
                 <div className="flex items-center justify-between p-6 border-b shrink-0">
                     <div>
-                        <h2 className="text-xl font-extrabold text-slate-900">Solicitar Nueva Elección</h2>
+                        <h2 className="text-xl font-extrabold text-slate-900">
+                            {isSurvey ? 'Crear Nueva Encuesta' : 'Crear Nueva Votación'}
+                        </h2>
                         <div className="flex gap-2 mt-2">
-                            {['Información básica', 'Candidatos', 'Pago y Envío'].map((label, idx) => (
+                            {[
+                                'Información y Módulos',
+                                isSurvey ? 'Preguntas y Opciones' : 'Candidatos / Opciones',
+                                'Resumen y Activación'
+                            ].map((label, idx) => (
                                 <span key={idx} className={`text-xs font-bold px-3 py-1 rounded-full ${step === idx + 1 ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-500'}`}>{idx + 1}. {label}</span>
                             ))}
                         </div>
@@ -120,59 +210,170 @@ const NewElectionModal = ({ onClose, onCreated, token }) => {
                 </div>
 
                 <div className="overflow-y-auto flex-1 p-6">
-                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex gap-2 text-sm text-amber-800 mb-5">
-                        <AlertCircle size={16} className="shrink-0 mt-0.5" />
-                        Tu solicitud será evaluada por un administrador antes de activarse.
-                    </div>
+                    {pricing.requiresAdminReview ? (
+                        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex gap-2 text-sm text-amber-800 mb-5">
+                            <AlertCircle size={16} className="shrink-0 mt-0.5" />
+                            <span>
+                                <strong>Paquete Completo de Auditorías seleccionado:</strong> Tu solicitud será revisada y certificada por un administrador antes de activarse.
+                            </span>
+                        </div>
+                    ) : (
+                        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 flex gap-2 text-sm text-emerald-800 mb-5">
+                            <CheckCircle size={16} className="shrink-0 mt-0.5" />
+                            <span>
+                                <strong>Activación automática (sin aprobación previa):</strong> Al completar el pago (o de inmediato si tu proceso es gratuito), quedará activo automáticamente sin esperar autorización de un administrador.
+                            </span>
+                        </div>
+                    )}
 
                     {step === 1 && (
                         <div className="space-y-4">
                             <div>
+                                <label className="text-xs font-bold text-slate-600 uppercase tracking-wide mb-2 block">¿Qué deseas crear? *</label>
+                                <div className="grid grid-cols-2 gap-3">
+                                    <button
+                                        type="button"
+                                        onClick={() => handleProcessKindChange('election')}
+                                        className={`p-3.5 rounded-2xl border-2 text-left transition-all ${!isSurvey ? 'border-blue-600 bg-blue-50 text-blue-900' : 'border-slate-200 hover:border-blue-300 text-slate-600'}`}
+                                    >
+                                        <div className="flex items-center justify-between mb-1">
+                                            <span className="font-black text-sm flex items-center gap-1.5"><Vote size={16} /> Votación Formal</span>
+                                            <span className="text-[11px] font-black text-blue-600">Base {formatCLP(PRICING_CATALOG.election.basePrice)}</span>
+                                        </div>
+                                        <p className="text-xs opacity-80">Directivas, sindicatos, juntas, copropiedades y elecciones escolares.</p>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => handleProcessKindChange('survey')}
+                                        className={`p-3.5 rounded-2xl border-2 text-left transition-all ${isSurvey ? 'border-cyan-600 bg-cyan-50 text-cyan-950' : 'border-slate-200 hover:border-cyan-300 text-slate-600'}`}
+                                    >
+                                        <div className="flex items-center justify-between mb-1">
+                                            <span className="font-black text-sm flex items-center gap-1.5"><MessageSquareText size={16} /> Encuesta Ciudadana</span>
+                                            <span className="text-[11px] font-black text-cyan-700">Base {formatCLP(PRICING_CATALOG.survey.basePrice)}</span>
+                                        </div>
+                                        <p className="text-xs opacity-80">Cuestionarios multi-pregunta con publicación opcional en Plaza Ciudadana.</p>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div>
                                 <label className="text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5 block">Título *</label>
-                                <input required value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder="ej: Elección de Directiva 2026" className={inputClass} />
+                                <input required value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder={isSurvey ? 'ej: Estudio Ciudadano de Movilidad 2026' : 'ej: Elección de Directiva 2026'} className={inputClass} />
                             </div>
                             <div>
                                 <label className="text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5 block">Tipo de Evento *</label>
                                 <select required value={form.electionType} onChange={e => setForm({ ...form, electionType: e.target.value })} className={inputClass}>
                                     <option value="">Selecciona...</option>
-                                    {EVENT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                                    {availableEventTypes.map(t => <option key={t} value={t}>{t}</option>)}
                                 </select>
                             </div>
                             <div>
                                 <label className="text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5 block">Descripción</label>
-                                <textarea value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} rows={2} placeholder="Describe el propósito de esta elección..." className={inputClass + ' resize-none'} />
+                                <textarea value={form.description} onChange={e => setForm({ ...form, description: e.target.value })} rows={2} placeholder={isSurvey ? 'Describe el objetivo de esta encuesta...' : 'Describe el propósito de esta elección...'} className={inputClass + ' resize-none'} />
                             </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5 block">
+                                        {isSurvey ? 'Participantes Estimados *' : 'N° Votantes Estimados *'}
+                                    </label>
+                                    <input required type="number" min="1" value={form.votersCount} onChange={e => setForm({ ...form, votersCount: e.target.value })} className={inputClass} />
+                                    <p className="text-[11px] text-slate-400 mt-1 font-medium">
+                                        Tarifa tramo actual: {formatCLP(pricing.perVoterRate)} c/u ({formatCLP(pricing.participantsFee)})
+                                    </p>
+                                </div>
+                                <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3 flex flex-col justify-center">
+                                    <span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Estimación Instantánea</span>
+                                    <span className="text-2xl font-black text-blue-600">
+                                        {pricing.total === 0 ? 'GRATIS ($0 CLP)' : formatCLP(pricing.total)}
+                                    </span>
+                                    <span className="text-[11px] text-slate-500">
+                                        {pricing.freeSchoolBenefit ? 'Beneficio Escolar 100% gratuito aplicado' : 'Pago único por evento'}
+                                    </span>
+                                </div>
+                            </div>
+
+                            <div className="space-y-2 bg-slate-50 border border-slate-200 rounded-2xl p-4">
+                                <label className="text-xs font-bold text-slate-600 uppercase tracking-wide block">Módulos y Servicios Adicionales</label>
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                                    <label className="flex items-start gap-2 text-xs font-medium text-slate-700 bg-white p-3 rounded-xl border border-slate-200 cursor-pointer">
+                                        <input type="checkbox" checked={form.modules.virtualAssembly} onChange={e => setForm({ ...form, modules: { ...form.modules, virtualAssembly: e.target.checked } })} className="rounded text-blue-600 mt-0.5" />
+                                        <span>
+                                            <strong className="block text-slate-900">Asamblea Virtual</strong>
+                                            <span className="text-slate-500">+{formatCLP(PRICING_CATALOG.modules.virtualAssembly.price)}</span>
+                                        </span>
+                                    </label>
+                                    <label className="flex items-start gap-2 text-xs font-medium text-slate-700 bg-white p-3 rounded-xl border border-slate-200 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={form.modules.technicalSupport || form.modules.fullAuditPackage}
+                                            disabled={form.modules.fullAuditPackage}
+                                            onChange={e => setForm({ ...form, modules: { ...form.modules, technicalSupport: e.target.checked } })}
+                                            className="rounded text-blue-600 mt-0.5"
+                                        />
+                                        <span>
+                                            <strong className="block text-slate-900">Soporte Técnico</strong>
+                                            <span className="text-slate-500">
+                                                {form.modules.fullAuditPackage ? 'Incluido en Auditoría' : `+${formatCLP(PRICING_CATALOG.modules.technicalSupport.price)}`}
+                                            </span>
+                                        </span>
+                                    </label>
+                                    <label className={`flex items-start gap-2 text-xs font-medium p-3 rounded-xl border cursor-pointer ${form.modules.fullAuditPackage ? 'bg-amber-50 border-amber-300 text-amber-950' : 'bg-white border-slate-200 text-slate-700'}`}>
+                                        <input type="checkbox" checked={form.modules.fullAuditPackage} onChange={e => setForm({ ...form, modules: { ...form.modules, fullAuditPackage: e.target.checked } })} className="rounded text-amber-600 mt-0.5" />
+                                        <span>
+                                            <strong className="block">Paquete Auditorías</strong>
+                                            <span className="text-[11px] opacity-80">+{formatCLP(PRICING_CATALOG.modules.fullAuditPackage.price)} · Evaluación Admin</span>
+                                        </span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            {isSurvey && (
+                                <div className="bg-cyan-50/70 border border-cyan-200 rounded-2xl p-4 space-y-3">
+                                    <label className="flex items-center gap-2.5 text-sm font-bold text-cyan-950 cursor-pointer">
+                                        <input
+                                            type="checkbox"
+                                            checked={form.plaza.featuredInPlaza}
+                                            onChange={e => setForm({
+                                                ...form,
+                                                plaza: { ...form.plaza, featuredInPlaza: e.target.checked },
+                                                settings: { ...form.settings, allowAutoRegistration: e.target.checked }
+                                            })}
+                                            className="rounded text-cyan-600"
+                                        />
+                                        <Sparkles size={16} className="text-cyan-600" />
+                                        Publicar en Plaza Ciudadana (/plaza) para participación pública abierta
+                                    </label>
+                                    {form.plaza.featuredInPlaza && (
+                                        <div className="grid grid-cols-2 gap-3 pt-1">
+                                            <div>
+                                                <label className="text-[11px] font-bold text-cyan-900 uppercase mb-1 block">Categoría Plaza</label>
+                                                <select value={form.plaza.category} onChange={e => setForm({ ...form, plaza: { ...form.plaza, category: e.target.value } })} className={inputClass}>
+                                                    {SURVEY_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="text-[11px] font-bold text-cyan-900 uppercase mb-1 block">Puntos Cívicos</label>
+                                                <input type="number" min="10" max="500" value={form.plaza.rewardPoints} onChange={e => setForm({ ...form, plaza: { ...form.plaza, rewardPoints: e.target.value } })} className={inputClass} />
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
-                                    <label className="text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5 block">N° Votantes Estimados *</label>
-                                    <input required type="number" value={form.votersCount} onChange={e => setForm({ ...form, votersCount: e.target.value })} className={inputClass} />
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-xs font-bold text-slate-600 uppercase tracking-wide block">Módulos Extra</label>
-                                    <div className="flex gap-4 pt-1">
-                                        <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
-                                            <input type="checkbox" checked={form.modules.virtualAssembly} onChange={e => setForm({ ...form, modules: { ...form.modules, virtualAssembly: e.target.checked } })} className="rounded text-blue-600" /> Asamblea
-                                        </label>
-                                        <label className="flex items-center gap-2 text-xs font-medium text-slate-600 cursor-pointer">
-                                            <input type="checkbox" checked={form.modules.technicalSupport} onChange={e => setForm({ ...form, modules: { ...form.modules, technicalSupport: e.target.checked } })} className="rounded text-blue-600" /> Soporte
-                                        </label>
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label className="text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5 block">Inicio de Votación *</label>
+                                    <label className="text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5 block">Inicio *</label>
                                     <input required type="datetime-local" value={form.startDate} onChange={e => setForm({ ...form, startDate: e.target.value })} className={inputClass} />
                                 </div>
                                 <div>
-                                    <label className="text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5 block">Cierre de Votación *</label>
+                                    <label className="text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5 block">Cierre *</label>
                                     <input required type="datetime-local" value={form.endDate} onChange={e => setForm({ ...form, endDate: e.target.value })} className={inputClass} />
                                 </div>
                             </div>
                         </div>
                     )}
 
-                    {step === 2 && (
+                    {step === 2 && !isSurvey && (
                         <div className="space-y-4">
                             <div className="flex items-center justify-between mb-2">
                                 <p className="text-slate-600 text-sm">Agrega los candidatos u opciones de votación (puedes hacerlo también después desde Configuración).</p>
@@ -187,7 +388,7 @@ const NewElectionModal = ({ onClose, onCreated, token }) => {
                             )}
                             {form.candidates.map((c, i) => (
                                 <div key={i} className="border border-slate-200 rounded-2xl p-4 space-y-3 relative">
-                                    <button onClick={() => delCand(i)} className="absolute top-3 right-3 w-7 h-7 flex items-center justify-center rounded-lg text-red-500 hover:bg-red-50"><Trash2 size={13} /></button>
+                                    <button type="button" onClick={() => delCand(i)} className="absolute top-3 right-3 w-7 h-7 flex items-center justify-center rounded-lg text-red-500 hover:bg-red-50"><Trash2 size={13} /></button>
                                     <p className="font-bold text-slate-700 text-sm">Candidato #{i + 1}</p>
                                     <div className="grid grid-cols-2 gap-3">
                                         <div><label className="text-xs font-bold text-slate-500 mb-1 block">Nombre</label><input value={c.name} onChange={e => updCand(i, 'name', e.target.value)} placeholder="Nombre completo" className={inputClass} /></div>
@@ -200,38 +401,109 @@ const NewElectionModal = ({ onClose, onCreated, token }) => {
                         </div>
                     )}
 
+                    {step === 2 && isSurvey && (
+                        <div className="space-y-4">
+                            <div className="flex items-center justify-between mb-2">
+                                <p className="text-slate-600 text-sm">Diseña las preguntas y alternativas de tu encuesta ciudadana.</p>
+                                <button type="button" onClick={addQuestion} className="flex items-center gap-1.5 px-4 py-2 bg-cyan-600 text-white rounded-xl text-sm font-bold hover:bg-cyan-700">
+                                    <Plus size={14} /> Agregar Pregunta
+                                </button>
+                            </div>
+                            {form.questions.map((q, qIdx) => (
+                                <div key={qIdx} className="border border-slate-200 rounded-2xl p-4 space-y-3 relative bg-slate-50/50">
+                                    {form.questions.length > 1 && (
+                                        <button type="button" onClick={() => removeQuestion(qIdx)} className="absolute top-3 right-3 w-7 h-7 flex items-center justify-center rounded-lg text-red-500 hover:bg-red-50"><Trash2 size={13} /></button>
+                                    )}
+                                    <div className="flex items-center justify-between pr-8">
+                                        <p className="font-bold text-slate-800 text-sm">Pregunta #{qIdx + 1}</p>
+                                        <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 cursor-pointer">
+                                            <input type="checkbox" checked={q.allowMultiple} onChange={e => updateQuestion(qIdx, 'allowMultiple', e.target.checked)} className="rounded text-cyan-600" />
+                                            Permitir múltiple selección
+                                        </label>
+                                    </div>
+                                    <input
+                                        value={q.prompt}
+                                        onChange={e => updateQuestion(qIdx, 'prompt', e.target.value)}
+                                        placeholder="ej: ¿Cuál es la prioridad más urgente para tu comuna?"
+                                        className={inputClass}
+                                    />
+                                    <div className="space-y-2 pl-2 border-l-2 border-cyan-200">
+                                        {(q.options || []).map((opt, optIdx) => (
+                                            <div key={optIdx} className="flex gap-2 items-center">
+                                                <input
+                                                    value={opt.label}
+                                                    onChange={e => updateOption(qIdx, optIdx, e.target.value)}
+                                                    placeholder={`Alternativa ${optIdx + 1}`}
+                                                    className={inputClass}
+                                                />
+                                                {(q.options || []).length > 2 && (
+                                                    <button type="button" onClick={() => removeOption(qIdx, optIdx)} className="p-2 text-slate-400 hover:text-red-500"><Trash2 size={14} /></button>
+                                                )}
+                                            </div>
+                                        ))}
+                                        <button type="button" onClick={() => addOption(qIdx)} className="text-xs font-bold text-cyan-700 hover:underline flex items-center gap-1">
+                                            <Plus size={12} /> Añadir alternativa
+                                        </button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
                     {step === 3 && (
-                        <div className="space-y-6 flex flex-col items-center justify-center py-4 text-center">
-                            <div className="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 mb-2">
-                                <CreditCard size={40} />
+                        <div className="space-y-5 flex flex-col items-center justify-center py-2 text-center">
+                            <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center text-blue-600">
+                                <CreditCard size={34} />
                             </div>
                             <div>
-                                <h3 className="text-xl font-black text-slate-900 mb-2">Activación de Elección</h3>
+                                <h3 className="text-xl font-black text-slate-900 mb-1">
+                                    {pricing.requiresAdminReview ? 'Pago y Envío a Auditoría Admin' : 'Pago y Activación Automática'}
+                                </h3>
                                 <p className="text-slate-600 text-sm leading-relaxed px-4">
-                                    Para que tu solicitud sea procesada y activada por nuestro equipo de administración, es necesario realizar el pago del servicio.
+                                    {pricing.requiresAdminReview
+                                        ? 'Al confirmar el pago, nuestro equipo administrador auditará y habilitará tu proceso con el paquete completo.'
+                                        : 'Al confirmar el pago (o al instante si es $0), tu votación o encuesta se aprobará y activará automáticamente sin intervención manual.'}
                                 </p>
                             </div>
 
-                            <div className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-6 space-y-3">
-                                <div className="flex justify-between items-center text-sm">
-                                    <span className="text-slate-500 font-medium text-left">Resumen de Cotización:<br /><small>{form.votersCount} votantes {form.modules.virtualAssembly ? '+ Asamblea' : ''} {form.modules.technicalSupport ? '+ Soporte' : ''}</small></span>
-                                    <span className="text-slate-900 font-black">${price.toLocaleString('es-CL')} CLP</span>
+                            <div className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-5 space-y-2.5 text-sm">
+                                <div className="flex justify-between items-center">
+                                    <span className="text-slate-500 font-medium">Tarifa Base ({PRICING_CATALOG.processes[pricing.processKind].name})</span>
+                                    <span className="font-bold text-slate-800">{formatCLP(pricing.baseFee)}</span>
                                 </div>
-                                {discount > 0 && (
-                                    <div className="flex justify-between items-center text-sm text-emerald-600 font-bold">
-                                        <span>Descuento Aplicado ({discount}%)</span>
-                                        <span>-${(price * discount / 100).toLocaleString('es-CL')} CLP</span>
+                                <div className="flex justify-between items-center">
+                                    <span className="text-slate-500 font-medium">{pricing.votersCount} participantes ({formatCLP(pricing.perVoterRate)} c/u)</span>
+                                    <span className="font-bold text-slate-800">{formatCLP(pricing.participantsFee)}</span>
+                                </div>
+                                {pricing.modulesFee > 0 && (
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-slate-500 font-medium">
+                                            Módulos ({[
+                                                form.modules.virtualAssembly && 'Asamblea',
+                                                form.modules.technicalSupport && !form.modules.fullAuditPackage && 'Soporte',
+                                                form.modules.fullAuditPackage && 'Paquete Auditorías + Soporte'
+                                            ].filter(Boolean).join(', ')})
+                                        </span>
+                                        <span className="font-bold text-slate-800">{formatCLP(pricing.modulesFee)}</span>
+                                    </div>
+                                )}
+                                {pricing.discountAmount > 0 && (
+                                    <div className="flex justify-between items-center text-emerald-600 font-bold">
+                                        <span>Descuento ({pricing.discountPercentage}%)</span>
+                                        <span>-{formatCLP(pricing.discountAmount)}</span>
                                     </div>
                                 )}
                                 <div className="h-px bg-slate-200 w-full" />
                                 <div className="flex justify-between items-center">
                                     <span className="text-slate-900 font-bold uppercase tracking-wider text-xs">Total a Pagar</span>
-                                    <span className="text-2xl font-black text-blue-600">${discountedPrice.toLocaleString('es-CL')} CLP</span>
+                                    <span className="text-2xl font-black text-blue-600">
+                                        {pricing.total === 0 ? '$0 CLP (Gratis)' : formatCLP(pricing.total)}
+                                    </span>
                                 </div>
                             </div>
 
                             <div className="w-full space-y-2">
-                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block text-left px-1">¿Tienes un cupón?</label>
+                                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block text-left px-1">¿Tienes un cupón (o puntos de Plaza Ciudadana)?</label>
                                 <div className="flex gap-2">
                                     <input
                                         type="text"
@@ -252,10 +524,10 @@ const NewElectionModal = ({ onClose, onCreated, token }) => {
                                 </div>
                             </div>
 
-                            <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-xl text-xs text-emerald-700 flex gap-3 text-left">
+                            <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-xl text-xs text-emerald-700 flex gap-3 text-left w-full">
                                 <ShieldCheck size={18} className="shrink-0" />
                                 <p>
-                                    <strong>Beneficio Escolar:</strong> Si eres un colegio en Chile, recuerda que tu primera elección es <strong>completamente gratuita</strong>. El sistema lo detectará automáticamente al finalizar.
+                                    <strong>Beneficio Escolar:</strong> Si eres un colegio en Chile, tu primera elección del año es <strong>completamente gratuita</strong>.
                                 </p>
                             </div>
                         </div>
@@ -268,28 +540,35 @@ const NewElectionModal = ({ onClose, onCreated, token }) => {
                         {step === 1 && (
                             <>
                                 <button type="button" onClick={onClose} className="flex-1 py-3 rounded-xl border border-slate-200 text-slate-600 font-bold hover:bg-slate-50">Cancelar</button>
-                                <button type="button" onClick={() => { if (form.title && form.electionType && form.startDate && form.endDate) setStep(2); else setError('Completa el título, tipo y fechas primero.'); }}
+                                <button type="button" onClick={() => { if (form.title && form.electionType && form.startDate && form.endDate) { setError(''); setStep(2); } else setError('Completa el título, tipo y fechas primero.'); }}
                                     className="flex-1 py-3 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700">Siguiente →</button>
                             </>
                         )}
                         {step === 2 && (
                             <>
                                 <button type="button" onClick={() => setStep(1)} className="flex-1 py-3 rounded-xl border border-slate-200 text-slate-600 font-bold hover:bg-slate-50">← Volver</button>
-                                <button type="button" onClick={() => setStep(3)} className="flex-1 py-3 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700">Siguiente: Pago →</button>
+                                <button type="button" onClick={() => setStep(3)} className="flex-1 py-3 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700">Siguiente: Resumen →</button>
                             </>
                         )}
                         {step === 3 && (
                             <>
                                 <button type="button" onClick={() => setStep(2)} className="flex-1 py-3 rounded-xl border border-slate-200 text-slate-600 font-bold hover:bg-slate-50">← Volver</button>
                                 <button type="button" onClick={handleSubmit} disabled={saving} className="flex-2 px-8 py-3 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-700 flex items-center justify-center gap-2 disabled:opacity-60">
-                                    {saving ? <Loader2 size={16} className="animate-spin" /> : <><PlusCircle size={16} />Pagar y Enviar Solicitud</>}
+                                    {saving ? <Loader2 size={16} className="animate-spin" /> : (
+                                        <>
+                                            <PlusCircle size={16} />
+                                            {pricing.total === 0
+                                                ? (pricing.requiresAdminReview ? 'Enviar a Auditoría Gratuita' : 'Activar Proceso Gratuito')
+                                                : (pricing.requiresAdminReview ? 'Pagar y Enviar a Auditoría' : 'Pagar y Activar Automáticamente')}
+                                        </>
+                                    )}
                                 </button>
                             </>
                         )}
                     </div>
                 </div>
-            </div >
-        </div >
+            </div>
+        </div>
     );
 };
 
@@ -525,6 +804,7 @@ const ConfigView = ({ user, elections, token, onRefresh, handlePayment }) => {
     const [selectedElection, setSelectedElection] = useState(null);
     const [form, setForm] = useState(null);
     const [saving, setSaving] = useState(false);
+    const [updatingStatus, setUpdatingStatus] = useState(false);
     const [msg, setMsg] = useState('');
 
     const loadElection = async (id) => {
@@ -534,14 +814,18 @@ const ConfigView = ({ user, elections, token, onRefresh, handlePayment }) => {
             const e = res.data.data;
             setSelectedElection(e);
             setForm({
+                processKind: e.processKind || (e.questions?.length ? 'survey' : 'election'),
                 title: e.title || '',
                 description: e.description || '',
                 electionType: e.electionType || '',
                 startDate: e.startDate ? e.startDate.slice(0, 16) : '',
                 endDate: e.endDate ? e.endDate.slice(0, 16) : '',
                 candidates: e.candidates?.length ? e.candidates : [],
+                questions: e.questions?.length ? e.questions : [],
+                plaza: e.plaza || { featuredInPlaza: false, category: SURVEY_CATEGORIES[0], rewardPoints: 50 },
                 settings: e.settings || { allowAutoRegistration: false }
             });
+            setVotingLink(e.status === 'active' ? `${window.location.origin}/vote/${e._id}` : '');
         } catch { setSelectedElection(null); setForm(null); }
     };
 
@@ -559,19 +843,83 @@ const ConfigView = ({ user, elections, token, onRefresh, handlePayment }) => {
         ...f, candidates: f.candidates.filter((_, idx) => idx !== i)
     }));
 
+    const addQuestion = () => setForm(f => ({
+        ...f, questions: [...(f.questions || []), createEmptyQuestion()]
+    }));
+    const updateQuestion = (qIdx, field, val) => setForm(f => {
+        const qs = [...(f.questions || [])];
+        qs[qIdx] = { ...qs[qIdx], [field]: val };
+        return { ...f, questions: qs };
+    });
+    const removeQuestion = (qIdx) => setForm(f => ({
+        ...f, questions: (f.questions || []).filter((_, idx) => idx !== qIdx)
+    }));
+    const addOption = (qIdx) => setForm(f => {
+        const qs = [...(f.questions || [])];
+        qs[qIdx] = { ...qs[qIdx], options: [...(qs[qIdx].options || []), { label: '' }] };
+        return { ...f, questions: qs };
+    });
+    const updateOption = (qIdx, optIdx, val) => setForm(f => {
+        const qs = [...(f.questions || [])];
+        const opts = [...(qs[qIdx].options || [])];
+        opts[optIdx] = { ...opts[optIdx], label: val };
+        qs[qIdx] = { ...qs[qIdx], options: opts };
+        return { ...f, questions: qs };
+    });
+    const removeOption = (qIdx, optIdx) => setForm(f => {
+        const qs = [...(f.questions || [])];
+        qs[qIdx] = { ...qs[qIdx], options: (qs[qIdx].options || []).filter((_, idx) => idx !== optIdx) };
+        return { ...f, questions: qs };
+    });
+
     const [votingLink, setVotingLink] = useState('');
     const [copied, setCopied] = useState(false);
 
     const save = async () => {
         setSaving(true); setMsg('');
         try {
-            await axios.put(`${API_URL}/api/elections/${selectedElection._id}`, form, { headers: { Authorization: `Bearer ${token}` } });
+            const payload = {
+                ...form,
+                questions: (form.questions || [])
+                    .map((q) => ({
+                        _id: q._id,
+                        prompt: String(q.prompt || '').trim(),
+                        allowMultiple: Boolean(q.allowMultiple),
+                        options: (q.options || [])
+                            .map((o) => ({ _id: o._id, label: String(o.label || '').trim() }))
+                            .filter((o) => o.label)
+                    }))
+                    .filter((q) => q.prompt && q.options.length > 0)
+            };
+            await axios.put(`${API_URL}/api/elections/${selectedElection._id}`, payload, { headers: { Authorization: `Bearer ${token}` } });
             setMsg('✅ Configuración guardada correctamente.');
             const link = `${window.location.origin}/vote/${selectedElection._id}`;
             setVotingLink(link);
+            await loadElection(selectedElection._id);
             onRefresh();
         } catch (err) { setMsg('❌ Error al guardar: ' + (err.response?.data?.error || 'Inténtalo de nuevo.')); }
         finally { setSaving(false); }
+    };
+
+    const handleChangeStatus = async (nextStatus) => {
+        if (!selectedElection) return;
+        setUpdatingStatus(true); setMsg('');
+        try {
+            await axios.put(
+                `${API_URL}/api/elections/${selectedElection._id}/status`,
+                { status: nextStatus },
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            setMsg(nextStatus === 'ended'
+                ? '✅ Proceso finalizado y sello Merkle anclado en Web3.'
+                : '✅ Proceso activado correctamente.');
+            await loadElection(selectedElection._id);
+            onRefresh();
+        } catch (err) {
+            setMsg('❌ ' + (err.response?.data?.error || 'No se pudo cambiar el estado.'));
+        } finally {
+            setUpdatingStatus(false);
+        }
     };
 
     const copyLink = () => {
@@ -646,7 +994,7 @@ const ConfigView = ({ user, elections, token, onRefresh, handlePayment }) => {
                                     </p>
                                     <div className="flex items-center justify-between bg-white/50 p-4 rounded-xl border border-amber-100">
                                         <span className="text-sm font-bold text-slate-700">Total a pagar:</span>
-                                        <span className="text-lg font-black text-amber-600">${(selectedElection.price || 15000).toLocaleString('es-CL')} CLP</span>
+                                        <span className="text-lg font-black text-amber-600">${(selectedElection.price ?? 0).toLocaleString('es-CL')} CLP</span>
                                     </div>
                                     <button
                                         type="button"
@@ -659,12 +1007,38 @@ const ConfigView = ({ user, elections, token, onRefresh, handlePayment }) => {
                             )}
 
                             {selectedElection && selectedElection.isPaid && (
-                                <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-5 flex items-center gap-3 my-2">
-                                    <CheckCircle className="text-emerald-600" size={20} />
-                                    <div>
-                                        <p className="text-emerald-800 font-bold text-sm">Pago Correcto</p>
-                                        <p className="text-emerald-700/70 text-xs font-medium">Esta elección ya cuenta con el pago validado.</p>
+                                <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-5 flex items-center justify-between gap-3 flex-wrap my-2">
+                                    <div className="flex items-center gap-3">
+                                        <CheckCircle className="text-emerald-600" size={20} />
+                                        <div>
+                                            <p className="text-emerald-800 font-bold text-sm">Pago Validado ({selectedElection.status === 'active' ? 'Proceso Activo' : selectedElection.status === 'ended' ? 'Proceso Finalizado' : 'Listo para Activar'})</p>
+                                            <p className="text-emerald-700/70 text-xs font-medium">
+                                                {selectedElection.requiresAdminReview && selectedElection.approvalStatus === 'pending'
+                                                    ? 'Pendiente de revisión de Paquete Completo de Auditorías.'
+                                                    : 'Habilitado automáticamente en el sistema Web3.'}
+                                            </p>
+                                        </div>
                                     </div>
+                                    {(!selectedElection.requiresAdminReview || selectedElection.approvalStatus === 'approved') && selectedElection.status === 'draft' && (
+                                        <button
+                                            type="button"
+                                            disabled={updatingStatus}
+                                            onClick={() => handleChangeStatus('active')}
+                                            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-colors disabled:opacity-60"
+                                        >
+                                            {updatingStatus ? 'Activando...' : 'Activar Ahora'}
+                                        </button>
+                                    )}
+                                    {selectedElection.status === 'active' && (
+                                        <button
+                                            type="button"
+                                            disabled={updatingStatus}
+                                            onClick={() => handleChangeStatus('ended')}
+                                            className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition-colors disabled:opacity-60"
+                                        >
+                                            {updatingStatus ? 'Sellando...' : 'Finalizar y Sellar Tally Web3'}
+                                        </button>
+                                    )}
                                 </div>
                             )}
 
@@ -680,10 +1054,16 @@ const ConfigView = ({ user, elections, token, onRefresh, handlePayment }) => {
                                 <div>
                                     <label className="text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5 block">Tipo de Evento</label>
                                     <select value={form.electionType} onChange={e => setForm({ ...form, electionType: e.target.value })} className={inputClass}>
-                                        {EVENT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                                        {ALL_EVENT_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
                                     </select>
                                 </div>
-                                <div />
+                                <div>
+                                    <label className="text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5 block">Modalidad</label>
+                                    <select value={form.processKind} onChange={e => setForm({ ...form, processKind: e.target.value })} className={inputClass}>
+                                        <option value="election">Votación Formal</option>
+                                        <option value="survey">Encuesta Ciudadana</option>
+                                    </select>
+                                </div>
                                 <div>
                                     <label className="text-xs font-bold text-slate-600 uppercase tracking-wide mb-1.5 block">Inicio de Votación</label>
                                     <input type="datetime-local" value={form.startDate} onChange={e => setForm({ ...form, startDate: e.target.value })} className={inputClass} />
@@ -724,7 +1104,84 @@ const ConfigView = ({ user, elections, token, onRefresh, handlePayment }) => {
                                         <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
                                     </label>
                                 </div>
+                                {/* Plaza Ciudadana Options */}
+                                <div className="p-4 bg-cyan-50/70 rounded-xl border border-cyan-200 space-y-3">
+                                    <label className="flex items-center justify-between cursor-pointer">
+                                        <div>
+                                            <p className="font-bold text-cyan-950 text-sm flex items-center gap-1.5"><Sparkles size={15} className="text-cyan-600" /> Destacar en Plaza Ciudadana (/plaza)</p>
+                                            <p className="text-xs text-cyan-800/80">Permite que ciudadanos participen desde el portal público acumulando puntos cívicos.</p>
+                                        </div>
+                                        <input
+                                            type="checkbox"
+                                            className="rounded text-cyan-600 w-5 h-5"
+                                            checked={Boolean(form.plaza?.featuredInPlaza)}
+                                            onChange={e => setForm({ ...form, plaza: { ...form.plaza, featuredInPlaza: e.target.checked } })}
+                                        />
+                                    </label>
+                                    {form.plaza?.featuredInPlaza && (
+                                        <div className="grid grid-cols-2 gap-3 pt-1">
+                                            <div>
+                                                <label className="text-[11px] font-bold text-cyan-900 uppercase mb-1 block">Categoría Plaza</label>
+                                                <select value={form.plaza?.category || SURVEY_CATEGORIES[0]} onChange={e => setForm({ ...form, plaza: { ...form.plaza, category: e.target.value } })} className={inputClass}>
+                                                    {SURVEY_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="text-[11px] font-bold text-cyan-900 uppercase mb-1 block">Puntos Cívicos</label>
+                                                <input type="number" min="10" max="500" value={form.plaza?.rewardPoints ?? 50} onChange={e => setForm({ ...form, plaza: { ...form.plaza, rewardPoints: Number(e.target.value) || 50 } })} className={inputClass} />
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
+
+                            {/* Survey Questions */}
+                            {form.processKind === 'survey' && (
+                                <div>
+                                    <div className="flex items-center justify-between mb-4">
+                                        <h4 className="font-bold text-slate-900 flex items-center gap-2"><MessageSquareText size={18} className="text-cyan-600" /> Preguntas de la Encuesta</h4>
+                                        <button type="button" onClick={addQuestion} className="flex items-center gap-1.5 px-4 py-2 bg-cyan-600 text-white rounded-xl text-sm font-bold hover:bg-cyan-700 transition-colors">
+                                            <Plus size={14} /> Agregar Pregunta
+                                        </button>
+                                    </div>
+                                    {(form.questions || []).length === 0 ? (
+                                        <div className="border-2 border-dashed border-slate-200 rounded-2xl p-6 text-center text-slate-400 text-sm">
+                                            Sin preguntas multi-opción aún. Puedes usar preguntas o bien usar candidatos/alternativas simples más abajo.
+                                        </div>
+                                    ) : (
+                                        <div className="space-y-4">
+                                            {form.questions.map((q, qIdx) => (
+                                                <div key={q._id || qIdx} className="border border-slate-200 rounded-2xl p-5 space-y-3 relative bg-slate-50/40">
+                                                    <button type="button" onClick={() => removeQuestion(qIdx)} className="absolute top-4 right-4 w-8 h-8 flex items-center justify-center rounded-xl text-red-500 hover:bg-red-50 transition-colors">
+                                                        <Trash2 size={15} />
+                                                    </button>
+                                                    <div className="flex items-center justify-between pr-10">
+                                                        <span className="font-semibold text-slate-700 text-sm">Pregunta #{qIdx + 1}</span>
+                                                        <label className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 cursor-pointer">
+                                                            <input type="checkbox" checked={Boolean(q.allowMultiple)} onChange={e => updateQuestion(qIdx, 'allowMultiple', e.target.checked)} className="rounded text-cyan-600" />
+                                                            Selección múltiple
+                                                        </label>
+                                                    </div>
+                                                    <input value={q.prompt} onChange={e => updateQuestion(qIdx, 'prompt', e.target.value)} placeholder="Escribe la pregunta..." className={inputClass} />
+                                                    <div className="space-y-2 pl-2 border-l-2 border-cyan-200">
+                                                        {(q.options || []).map((opt, optIdx) => (
+                                                            <div key={opt._id || optIdx} className="flex gap-2 items-center">
+                                                                <input value={opt.label} onChange={e => updateOption(qIdx, optIdx, e.target.value)} placeholder={`Alternativa ${optIdx + 1}`} className={inputClass} />
+                                                                {(q.options || []).length > 2 && (
+                                                                    <button type="button" onClick={() => removeOption(qIdx, optIdx)} className="p-2 text-slate-400 hover:text-red-500"><Trash2 size={14} /></button>
+                                                                )}
+                                                            </div>
+                                                        ))}
+                                                        <button type="button" onClick={() => addOption(qIdx)} className="text-xs font-bold text-cyan-700 hover:underline flex items-center gap-1">
+                                                            <Plus size={12} /> Añadir alternativa
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
 
                             {/* Candidates */}
                             <div>
@@ -783,14 +1240,14 @@ const ConfigView = ({ user, elections, token, onRefresh, handlePayment }) => {
                             {votingLink && (
                                 <div className="bg-blue-50 border border-blue-200 rounded-2xl p-5 space-y-3">
                                     <div className="flex items-center gap-2 text-blue-800 font-bold">
-                                        <Link2 size={16} /> Enlace de Votación
+                                        <Link2 size={16} /> Enlace Directo de Participación
                                     </div>
-                                    <p className="text-blue-700 text-sm">Comparte este link con los votantes. Solo votarán quienes estén en el padrón.</p>
+                                    <p className="text-blue-700 text-sm">Comparte este link con los votantes o participantes.</p>
                                     <div className="flex gap-2 items-center">
                                         <input readOnly value={votingLink}
                                             className="flex-1 px-4 py-2.5 rounded-xl bg-white border border-blue-200 text-blue-900 text-sm font-mono outline-none"
                                         />
-                                        <button onClick={copyLink}
+                                        <button type="button" onClick={copyLink}
                                             className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-colors ${copied ? 'bg-emerald-500 text-white' : 'bg-blue-600 hover:bg-blue-700 text-white'}`}>
                                             {copied ? <>✓ Copiado!</> : <><Copy size={15} /> Copiar</>}
                                         </button>
@@ -799,6 +1256,14 @@ const ConfigView = ({ user, elections, token, onRefresh, handlePayment }) => {
                                             <ExternalLink size={15} /> Abrir
                                         </a>
                                     </div>
+                                    {selectedElection?.plaza?.featuredInPlaza && (
+                                        <div className="pt-2 border-t border-blue-200/70 flex items-center justify-between text-xs text-cyan-800">
+                                            <span className="font-bold">También publicada públicamente en Plaza Ciudadana</span>
+                                            <Link to="/plaza" className="font-black underline flex items-center gap-1">
+                                                Ir a /plaza <ExternalLink size={12} />
+                                            </Link>
+                                        </div>
+                                    )}
                                 </div>
                             )}
 
@@ -831,21 +1296,25 @@ const ClientDashboard = () => {
     const [showingReport, setShowingReport] = useState(false);
     const [showingAudit, setShowingAudit] = useState(false);
 
-    const user = JSON.parse(localStorage.getItem('adminUser') || '{}');
+    const user = useMemo(() => JSON.parse(localStorage.getItem('adminUser') || '{}'), []);
     const token = localStorage.getItem('adminToken');
 
     useEffect(() => {
         if (!token || !user?.email) navigate('/login');
-    }, []);
+    }, [navigate, token, user?.email]);
 
-    const fetchElections = async () => {
+    const fetchElections = useCallback(async () => {
+        if (!token) return;
         setLoading(true);
         try {
             const res = await axios.get(`${API_URL}/api/elections`, { headers: { Authorization: `Bearer ${token}` } });
             setElections(res.data.data || []);
-        } catch { }
-        finally { setLoading(false); }
-    };
+        } catch {
+            setElections([]);
+        } finally {
+            setLoading(false);
+        }
+    }, [token]);
 
     const handlePayment = async (electionId) => {
         try {
@@ -856,7 +1325,7 @@ const ClientDashboard = () => {
             if (res.data.init_point) {
                 window.location.href = res.data.init_point;
             }
-        } catch (error) {
+        } catch {
             alert('Error al iniciar el pago con Mercado Pago.');
         }
     };
@@ -867,8 +1336,8 @@ const ClientDashboard = () => {
             const res = await axios.get(`${API_URL}/api/elections/${electionId}/audit`, { headers: { Authorization: `Bearer ${token}` } });
             setAuditLog(res.data.data);
             setShowingAudit(true);
-        } catch (e) {
-            alert('Error al obtener el log de auditoria.');
+        } catch {
+            alert('Error al obtener el log de auditoría.');
         } finally {
             setLoading(false);
         }
@@ -880,7 +1349,7 @@ const ClientDashboard = () => {
             const res = await axios.get(`${API_URL}/api/elections/${electionId}/report`, { headers: { Authorization: `Bearer ${token}` } });
             setReportData(res.data.data);
             setShowingReport(true);
-        } catch (e) {
+        } catch {
             alert('Error al obtener el reporte.');
         } finally {
             setLoading(false);
@@ -891,7 +1360,7 @@ const ClientDashboard = () => {
         window.print();
     };
 
-    useEffect(() => { fetchElections(); }, []);
+    useEffect(() => { fetchElections(); }, [fetchElections]);
 
     const handleLogout = () => {
         localStorage.removeItem('adminToken');
@@ -909,8 +1378,8 @@ const ClientDashboard = () => {
     };
 
     const activeCount = elections.filter(e => e.status === 'active' && !isActuallyEnded(e)).length;
-    const pendingAdminCount = elections.filter(e => e.approvalStatus === 'pending').length;
-    const pendingPaymentCount = elections.filter(e => e.approvalStatus === 'approved' && !e.isPaid).length;
+    const pendingAdminCount = elections.filter(e => e.requiresAdminReview && e.approvalStatus === 'pending').length;
+    const pendingPaymentCount = elections.filter(e => (!e.requiresAdminReview || e.approvalStatus === 'approved') && !e.isPaid).length;
     const rejectedCount = elections.filter(e => e.approvalStatus === 'rejected').length;
     const endedCount = elections.filter(e => isActuallyEnded(e)).length;
     const userInitials = initials(user.username || user.email || '?');
@@ -929,8 +1398,8 @@ const ClientDashboard = () => {
                     </div>
                     <nav className="flex-1 px-4 py-4 space-y-1">
                         {[
-                            { id: 'elections', icon: <Activity size={18} />, label: 'Mis Elecciones' },
-                            { id: 'voters', icon: <Users size={18} />, label: 'Votantes' },
+                            { id: 'elections', icon: <Activity size={18} />, label: 'Mis Procesos' },
+                            { id: 'voters', icon: <Users size={18} />, label: 'Padrón y Votantes' },
                             { id: 'config', icon: <Settings size={18} />, label: 'Configuración' },
                         ].map(item => (
                             <button key={item.id} onClick={() => setActiveView(item.id)}
@@ -938,6 +1407,12 @@ const ClientDashboard = () => {
                                 {item.icon} {item.label}
                             </button>
                         ))}
+                        <Link
+                            to="/plaza"
+                            className="w-full text-left flex items-center gap-3 px-4 py-3 rounded-xl font-medium text-cyan-300 hover:bg-cyan-500/10 hover:text-cyan-200 transition-colors"
+                        >
+                            <Sparkles size={18} /> Plaza Ciudadana
+                        </Link>
                     </nav>
                     <div className="p-4 border-t border-slate-800">
                         <div className="flex items-center gap-3 px-2 mb-4">
@@ -984,7 +1459,7 @@ const ClientDashboard = () => {
                                         </p>
                                     </div>
                                     <button onClick={() => setShowModal(true)} className="relative z-10 px-6 py-3 bg-white text-blue-600 font-bold rounded-xl shadow-lg hover:bg-slate-50 transition-all flex items-center gap-2 shrink-0">
-                                        <PlusCircle size={20} /> Crear Nueva Elección
+                                        <PlusCircle size={20} /> Crear Votación o Encuesta
                                     </button>
                                 </div>
 
@@ -1023,25 +1498,38 @@ const ClientDashboard = () => {
                                         <div className="divide-y divide-slate-100">
                                             {filtered.map(election => {
                                                 const s = statusMap[election.status] || statusMap.draft;
+                                                const isSurveyItem = election.processKind === 'survey' || election.questions?.length > 0;
+                                                const canOpenVoting = election.status === 'active' || election.status === 'ended';
+                                                const needsPayment = (!election.requiresAdminReview || election.approvalStatus === 'approved') && !election.isPaid;
                                                 return (
                                                     <div key={election._id} className="p-6 hover:bg-slate-50 flex flex-col sm:flex-row items-center gap-4">
                                                         <div className={`w-3 h-3 rounded-full shrink-0 ${s.dot}`} />
                                                         <div className="flex-1 min-w-0">
                                                             <div className="flex items-center gap-2 flex-wrap">
                                                                 <p className="font-bold text-slate-900">{election.title}</p>
-                                                                {election.approvalStatus === 'pending' && <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-bold border border-amber-200">En revisión</span>}
+                                                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-black uppercase ${isSurveyItem ? 'bg-cyan-100 text-cyan-800' : 'bg-blue-100 text-blue-800'}`}>
+                                                                    {isSurveyItem ? 'Encuesta' : 'Votación'}
+                                                                </span>
+                                                                {election.plaza?.featuredInPlaza && (
+                                                                    <span className="text-[10px] bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full font-bold">
+                                                                        Plaza Ciudadana
+                                                                    </span>
+                                                                )}
+                                                                {election.requiresAdminReview && election.approvalStatus === 'pending' && (
+                                                                    <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-bold border border-amber-200">Auditoría Admin Pendiente</span>
+                                                                )}
                                                                 {election.approvalStatus === 'rejected' && <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold border border-red-200">Rechazada</span>}
                                                             </div>
-                                                            <p className="text-sm text-slate-500 flex items-center gap-2 mt-1">
-                                                                <Clock size={12} /> {election.electionType || '—'}
+                                                            <p className="text-sm text-slate-500 flex items-center gap-2 mt-1 flex-wrap">
+                                                                <Clock size={12} /> {election.electionType || '—'} · {(election.price ?? 0) === 0 ? 'Gratuito' : `${(election.price ?? 0).toLocaleString('es-CL')} CLP`}
                                                                 {election.adminNote && <span className="text-red-500 italic">· {election.adminNote}</span>}
                                                             </p>
                                                         </div>
-                                                        {election.status === 'active' ? (
-                                                            <div className="flex gap-2">
-                                                                <a href={`/vote/${election._id}`} target="_blank" rel="noreferrer"
+                                                        {canOpenVoting ? (
+                                                            <div className="flex gap-2 flex-wrap">
+                                                                <a href={isSurveyItem && election.plaza?.featuredInPlaza ? '/plaza' : `/vote/${election._id}`} target="_blank" rel="noreferrer"
                                                                     className={`flex items-center gap-1.5 px-4 py-2 rounded-xl font-bold text-sm transition-colors ${s.btn}`}>
-                                                                    {s.btnLabel} <ExternalLink size={14} />
+                                                                    {election.status === 'ended' ? 'Finalizada' : 'Ver'} <ExternalLink size={14} />
                                                                 </a>
                                                                 <button
                                                                     onClick={() => fetchAudit(election._id)}
@@ -1056,7 +1544,7 @@ const ClientDashboard = () => {
                                                                     <FileText size={16} /> Acta
                                                                 </button>
                                                             </div>
-                                                        ) : election.approvalStatus === 'approved' && !election.isPaid ? (
+                                                        ) : needsPayment ? (
                                                             <button
                                                                 onClick={() => handlePayment(election._id)}
                                                                 className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-xl font-bold text-sm hover:bg-blue-700 transition-all shadow-lg shadow-blue-500/20"
@@ -1252,25 +1740,51 @@ const ClientDashboard = () => {
                                     <p className="text-3xl font-black text-red-700">{reportData.stats.nuloVotes || 0}</p>
                                 </div>
                             </div>
-                            <div className="space-y-4">
-                                <h3 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-                                    <Activity size={20} className="text-blue-600" /> Resultados del Escrutinio
-                                </h3>
-                                <div className="grid gap-3">
-                                    {reportData.results.map(res => (
-                                        <div key={res._id} className="p-5 bg-white border border-slate-100 rounded-2xl flex items-center justify-between shadow-sm">
-                                            <div className="flex items-center gap-4">
-                                                {res.imageUrl && <img src={res.imageUrl} className="w-12 h-12 rounded-xl object-cover" />}
-                                                <p className="font-bold text-slate-800">{res.name}</p>
-                                            </div>
-                                            <div className="text-right">
-                                                <p className="text-2xl font-black text-slate-900">{res.votes}</p>
-                                                <p className="text-xs font-bold text-slate-400 uppercase">Votos</p>
+                            {reportData.questionResults && reportData.questionResults.length > 0 ? (
+                                <div className="space-y-4">
+                                    <h3 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+                                        <BarChart3 size={20} className="text-cyan-600" /> Resultados de Encuesta por Pregunta
+                                    </h3>
+                                    {reportData.questionResults.map((qr, qIdx) => (
+                                        <div key={qr.questionId || qIdx} className="p-5 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
+                                            <p className="font-bold text-slate-900">{qIdx + 1}. {qr.prompt}</p>
+                                            <div className="space-y-2">
+                                                {(qr.options || []).map((opt, optIdx) => (
+                                                    <div key={optIdx} className="bg-white p-3 rounded-xl border border-slate-100">
+                                                        <div className="flex justify-between text-xs font-bold text-slate-700 mb-1">
+                                                            <span>{opt.label}</span>
+                                                            <span>{opt.votes} votos ({opt.percentage}%)</span>
+                                                        </div>
+                                                        <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                                                            <div className="h-full bg-cyan-500 rounded-full" style={{ width: `${opt.percentage}%` }} />
+                                                        </div>
+                                                    </div>
+                                                ))}
                                             </div>
                                         </div>
                                     ))}
                                 </div>
-                            </div>
+                            ) : (
+                                <div className="space-y-4">
+                                    <h3 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+                                        <Activity size={20} className="text-blue-600" /> Resultados del Escrutinio
+                                    </h3>
+                                    <div className="grid gap-3">
+                                        {reportData.results.map(res => (
+                                            <div key={res._id} className="p-5 bg-white border border-slate-100 rounded-2xl flex items-center justify-between shadow-sm">
+                                                <div className="flex items-center gap-4">
+                                                    {res.imageUrl && <img src={res.imageUrl} alt={res.name} className="w-12 h-12 rounded-xl object-cover" />}
+                                                    <p className="font-bold text-slate-800">{res.name}</p>
+                                                </div>
+                                                <div className="text-right">
+                                                    <p className="text-2xl font-black text-slate-900">{res.votes}</p>
+                                                    <p className="text-xs font-bold text-slate-400 uppercase">Votos</p>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
                             <div className="border-t pt-8 text-[10px] text-slate-400 font-medium flex justify-between uppercase tracking-widest">
                                 <p>Certificado por Einsoft Ballots - Legal Verification Protocol</p>
                                 <p>ID de Auditoria: {reportData.election._id}</p>

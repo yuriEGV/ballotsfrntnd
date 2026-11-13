@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
-    CheckCircle, User, Info, Loader2, ChevronRight,
+    CheckCircle, User, Info, Loader2, ChevronRight, MessageSquareText,
     ShieldCheck, Lock, AlertTriangle, FileText, XCircle, ExternalLink, Copy, Check
 } from 'lucide-react';
 import axios from 'axios';
@@ -15,6 +15,7 @@ const VotingBooth = () => {
     const [voter, setVoter] = useState(null);
     const [loading, setLoading] = useState(true);
     const [selectedCandidate, setSelectedCandidate] = useState(null);
+    const [selectedAnswers, setSelectedAnswers] = useState({});
     const [submitting, setSubmitting] = useState(false);
     const [voted, setVoted] = useState(false);
     const [voteReceipt, setVoteReceipt] = useState(null);
@@ -46,17 +47,57 @@ const VotingBooth = () => {
         fetchBoothData();
     }, [electionId, navigate]);
 
+    const questions = Array.isArray(election?.questions) ? election.questions : [];
+    const isMultiQuestionSurvey = questions.length > 0;
+    const isSurvey = election?.processKind === 'survey' || isMultiQuestionSurvey;
+
+    const allQuestionsAnswered = isMultiQuestionSurvey
+        ? questions.every((q) => (selectedAnswers[q._id] || []).length > 0)
+        : false;
+    const isReadyToSubmit = isMultiQuestionSurvey
+        ? allQuestionsAnswered || selectedCandidate === 'nulo'
+        : Boolean(selectedCandidate);
+
+    const handleToggleQuestionOption = (question, optionLabel) => {
+        if (selectedCandidate === 'nulo') {
+            setSelectedCandidate(null);
+        }
+        setSelectedAnswers((prev) => {
+            const current = prev[question._id] || [];
+            if (question.allowMultiple) {
+                const exists = current.includes(optionLabel);
+                const next = exists
+                    ? current.filter((item) => item !== optionLabel)
+                    : [...current, optionLabel];
+                return { ...prev, [question._id]: next };
+            }
+            return { ...prev, [question._id]: [optionLabel] };
+        });
+    };
+
     const handleCastVote = async () => {
-        if (!selectedCandidate) return;
+        if (!isReadyToSubmit) return;
         setSubmitting(true);
         setError('');
 
         try {
             const token = localStorage.getItem('voterToken');
+            const isNulo = selectedCandidate === 'nulo';
+            const surveyAnswersPayload =
+                isMultiQuestionSurvey && !isNulo
+                    ? questions.map((q) => ({
+                        questionId: q._id,
+                        selectedOptions: selectedAnswers[q._id] || []
+                    }))
+                    : null;
+
             const res = await axios.post(`${API_URL}/api/ballots`, {
-                candidateId: selectedCandidate === 'blank' || selectedCandidate === 'nulo' ? null : selectedCandidate._id,
+                candidateId: isMultiQuestionSurvey || selectedCandidate === 'blank' || isNulo
+                    ? null
+                    : selectedCandidate._id,
                 electionId: electionId,
-                isNulo: selectedCandidate === 'nulo'
+                isNulo,
+                surveyAnswers: surveyAnswersPayload
             }, {
                 headers: { Authorization: `Bearer ${token}` }
             });
@@ -163,10 +204,13 @@ const VotingBooth = () => {
                 <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
                     <div className="space-y-1">
                         <div className="flex items-center gap-2 text-blue-600 font-bold text-sm tracking-wider uppercase">
-                            <Lock size={14} /> Cabina de Votación Segura
+                            {isSurvey ? <MessageSquareText size={14} /> : <Lock size={14} />}
+                            {isSurvey ? 'Encuesta Digital Verificada' : 'Cabina de Votación Segura'}
                         </div>
                         <h1 className="text-4xl font-black text-slate-900 tracking-tight">{election?.title}</h1>
-                        <p className="text-slate-500 font-medium">Elección oficial de Einsoft Ballots</p>
+                        <p className="text-slate-500 font-medium">
+                            {isSurvey ? 'Participación ciudadana única con respaldo Web3' : 'Elección oficial de Einsoft Ballots'}
+                        </p>
                     </div>
 
                     <div className="bg-white border border-slate-200 px-4 py-3 rounded-2xl shadow-sm flex items-center gap-3">
@@ -174,7 +218,9 @@ const VotingBooth = () => {
                             <User size={20} />
                         </div>
                         <div>
-                            <p className="text-xs text-slate-400 font-bold uppercase">Votante Identificado</p>
+                            <p className="text-xs text-slate-400 font-bold uppercase">
+                                {isSurvey ? 'Participante Identificado' : 'Votante Identificado'}
+                            </p>
                             <p className="text-sm font-bold text-slate-700">{voter?.name}</p>
                             {election?.settings?.weightedVoting && (
                                 <p className="text-[11px] font-bold text-indigo-600">Ponderación: {voter?.weight || 1}</p>
@@ -189,12 +235,75 @@ const VotingBooth = () => {
                         <Info size={24} />
                     </div>
                     <p className="text-blue-800 font-medium leading-tight">
-                        Por favor, selecciona una de las opciones a continuación y presiona "Confirmar Mi Voto".
-                        Recuerda que una vez enviado, no podrás cambiar tu elección.
+                        {isMultiQuestionSurvey
+                            ? 'Responde todas las preguntas a continuación y presiona "Confirmar Respuesta". Tu identidad nunca queda asociada a tus respuestas.'
+                            : 'Por favor, selecciona una de las opciones a continuación y presiona "Confirmar Mi Voto". Recuerda que una vez enviado, no podrás cambiar tu elección.'}
                     </p>
                 </div>
 
-                {/* Candidates Grid */}
+                {/* Survey Questions OR Candidates Grid */}
+                {isMultiQuestionSurvey ? (
+                    <div className="space-y-6">
+                        {questions.map((question, qIndex) => {
+                            const currentSelection = selectedAnswers[question._id] || [];
+                            return (
+                                <div key={question._id || qIndex} className="bg-white border border-slate-200 rounded-[2rem] p-6 md:p-8 shadow-sm space-y-4">
+                                    <div className="flex items-start justify-between gap-4">
+                                        <div>
+                                            <span className="text-xs font-black uppercase tracking-wider text-blue-600">
+                                                Pregunta {qIndex + 1} de {questions.length}
+                                            </span>
+                                            <h3 className="text-xl font-black text-slate-900 mt-1">{question.prompt}</h3>
+                                        </div>
+                                        <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 shrink-0">
+                                            {question.allowMultiple ? 'Selección múltiple' : 'Opción única'}
+                                        </span>
+                                    </div>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                        {(question.options || []).map((opt, optIdx) => {
+                                            const active = currentSelection.includes(opt.label);
+                                            return (
+                                                <button
+                                                    type="button"
+                                                    key={opt._id || optIdx}
+                                                    onClick={() => handleToggleQuestionOption(question, opt.label)}
+                                                    className={`text-left p-4 rounded-2xl border-2 transition-all flex items-center justify-between gap-3 ${active
+                                                        ? 'border-blue-600 bg-blue-50 text-blue-900 shadow-md'
+                                                        : 'border-slate-100 bg-slate-50/60 hover:border-blue-300 text-slate-700'
+                                                        }`}
+                                                >
+                                                    <span className="font-bold text-sm">{opt.label}</span>
+                                                    {active && <CheckCircle size={20} className="text-blue-600 shrink-0" />}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            );
+                        })}
+
+                        <div
+                            onClick={() => setSelectedCandidate(selectedCandidate === 'nulo' ? null : 'nulo')}
+                            className={`group relative bg-white border-2 rounded-[2rem] p-5 cursor-pointer transition-all ${selectedCandidate === 'nulo'
+                                ? 'border-red-600 ring-4 ring-red-600/10 bg-red-50/40'
+                                : 'border-slate-100 hover:border-red-300'
+                                }`}
+                        >
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-4">
+                                    <div className="w-12 h-12 bg-red-50 text-red-500 rounded-xl flex items-center justify-center border border-red-100">
+                                        <XCircle size={24} />
+                                    </div>
+                                    <div>
+                                        <h4 className="font-black text-slate-900">Anular Participación (Nulo)</h4>
+                                        <p className="text-xs text-slate-500">Marca esta opción si deseas emitir un voto nulo en el acta.</p>
+                                    </div>
+                                </div>
+                                {selectedCandidate === 'nulo' && <CheckCircle size={24} className="text-red-600" />}
+                            </div>
+                        </div>
+                    </div>
+                ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     {candidates.map((candidate) => (
                         <div
@@ -287,28 +396,31 @@ const VotingBooth = () => {
                         )}
                     </div>
                 </div>
+                )}
 
                 {/* Final Submission Card */}
-                <div className={`transition-all duration-500 p-8 rounded-[2.5rem] bg-white border border-slate-200 shadow-2xl flex flex-col md:flex-row items-center justify-between gap-8 ${!selectedCandidate ? 'opacity-50 grayscale' : 'opacity-100'}`}>
+                <div className={`transition-all duration-500 p-8 rounded-[2.5rem] bg-white border border-slate-200 shadow-2xl flex flex-col md:flex-row items-center justify-between gap-8 ${!isReadyToSubmit ? 'opacity-50 grayscale' : 'opacity-100'}`}>
                     <div className="flex items-center gap-6">
                         <div className="w-16 h-16 bg-slate-900 text-white rounded-2xl flex items-center justify-center shadow-xl">
                             <ShieldCheck size={32} />
                         </div>
                         <div>
-                            <h3 className="text-2xl font-black text-slate-900">Confirmación de Voto</h3>
+                            <h3 className="text-2xl font-black text-slate-900">
+                                {isSurvey ? 'Confirmación de Respuesta' : 'Confirmación de Voto'}
+                            </h3>
                             <p className="text-slate-500 font-medium">Tu elección será sellada criptográficamente antes del envío.</p>
                         </div>
                     </div>
 
                     <div className="flex flex-col gap-3 w-full md:w-auto">
                         <button
-                            disabled={!selectedCandidate || submitting}
+                            disabled={!isReadyToSubmit || submitting}
                             onClick={handleCastVote}
                             className="bg-slate-900 hover:bg-slate-800 disabled:bg-slate-300 text-white px-10 py-5 rounded-2xl font-black text-lg transition-all flex items-center justify-center gap-3 shadow-2xl shadow-slate-900/30 active:scale-95 group"
                         >
                             {submitting ? <Loader2 className="animate-spin" size={24} /> : (
                                 <>
-                                    Confirmar Mi Voto
+                                    {isSurvey ? 'Confirmar Respuesta' : 'Confirmar Mi Voto'}
                                     <ChevronRight size={24} className="group-hover:translate-x-1 transition-transform" />
                                 </>
                             )}

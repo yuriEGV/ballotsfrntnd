@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-    ShieldAlert, Activity, Users, LogOut, CheckCircle, XCircle, ShieldCheck,
-    Clock, Eye, Mail, FileText, Printer, RefreshCw, UserX, AlertTriangle, ClipboardList,
-    Ticket, Trash2, Plus, ExternalLink
+    Activity, Users, LogOut, CheckCircle, XCircle, ShieldCheck,
+    Clock, Mail, FileText, Printer, RefreshCw, AlertTriangle, ClipboardList,
+    Ticket, Trash2, Plus, ExternalLink, Loader2
 } from 'lucide-react';
 import axios from 'axios';
 import { API_URL } from '../config.js';
@@ -23,40 +23,41 @@ const AdminDashboard = () => {
     const [newCoupon, setNewCoupon] = useState({ code: '', discountPercentage: 10, validUntil: '' });
     const [users, setUsers] = useState([]);
 
-    const adminUser = JSON.parse(localStorage.getItem('adminUser') || '{}');
     const token = localStorage.getItem('adminToken');
+    const authHeaders = useMemo(() => ({ headers: { Authorization: `Bearer ${token}` } }), [token]);
 
-    const authHeaders = { headers: { Authorization: `Bearer ${token}` } };
-
-    const fetchElections = async () => {
+    const fetchElections = useCallback(async () => {
+        if (!token) return;
         setLoading(true);
         try {
             const res = await axios.get(`${API_URL}/api/elections`, authHeaders);
             setElections(res.data.data || []);
-        } catch (e) {
-            console.error('Error fetching elections:', e);
+        } catch (err) {
+            console.error('Error fetching elections:', err);
         } finally {
             setLoading(false);
         }
-    };
+    }, [token, authHeaders]);
 
-    const fetchCoupons = async () => {
+    const fetchCoupons = useCallback(async () => {
+        if (!token) return;
         try {
             const res = await axios.get(`${API_URL}/api/coupons`, authHeaders);
             setCoupons(res.data.data || []);
-        } catch (e) {
-            console.error('Error fetching coupons:', e);
+        } catch (err) {
+            console.error('Error fetching coupons:', err);
         }
-    };
+    }, [token, authHeaders]);
 
-    const fetchUsers = async () => {
+    const fetchUsers = useCallback(async () => {
+        if (!token) return;
         try {
             const res = await axios.get(`${API_URL}/api/users`, authHeaders);
             setUsers(res.data.data || []);
-        } catch (e) {
-            console.error('Error fetching users:', e);
+        } catch (err) {
+            console.error('Error fetching users:', err);
         }
-    };
+    }, [token, authHeaders]);
 
     useEffect(() => {
         if (!token) { navigate('/login'); return; }
@@ -65,7 +66,7 @@ const AdminDashboard = () => {
         fetchUsers();
         const interval = setInterval(fetchElections, 30000);
         return () => clearInterval(interval);
-    }, []);
+    }, [token, navigate, fetchElections, fetchCoupons, fetchUsers]);
 
     const fetchReport = async (electionId) => {
         setLoading(true);
@@ -73,8 +74,8 @@ const AdminDashboard = () => {
             const res = await axios.get(`${API_URL}/api/elections/${electionId}/report`, authHeaders);
             setReportData(res.data.data);
             setShowingReport(true);
-        } catch (e) {
-            alert('Error al obtener el reporte de la eleccion.');
+        } catch {
+            alert('Error al obtener el reporte del proceso.');
         } finally {
             setLoading(false);
         }
@@ -86,8 +87,8 @@ const AdminDashboard = () => {
             const res = await axios.get(`${API_URL}/api/elections/${electionId}/audit`, authHeaders);
             setAuditLog(res.data.data);
             setShowingAudit(true);
-        } catch (e) {
-            alert('Error al obtener el log de auditoria.');
+        } catch {
+            alert('Error al obtener el log de auditoría.');
         } finally {
             setLoading(false);
         }
@@ -99,8 +100,8 @@ const AdminDashboard = () => {
             await axios.put(`${API_URL}/api/elections/${id}/evaluate`,
                 { approvalStatus, reason }, authHeaders);
             await fetchElections();
-        } catch (e) {
-            alert('Error al evaluar la eleccion.');
+        } catch {
+            alert('Error al evaluar la solicitud.');
         } finally {
             setEvaluating(null);
         }
@@ -119,8 +120,8 @@ const AdminDashboard = () => {
             setShowingCouponModal(false);
             setNewCoupon({ code: '', discountPercentage: 10, validUntil: '' });
             fetchCoupons();
-        } catch (e) {
-            alert(e.response?.data?.message || 'Error al crear cupón');
+        } catch (err) {
+            alert(err.response?.data?.message || 'Error al crear cupón');
         }
     };
 
@@ -128,7 +129,7 @@ const AdminDashboard = () => {
         try {
             await axios.patch(`${API_URL}/api/coupons/${id}/toggle`, {}, authHeaders);
             fetchCoupons();
-        } catch (e) {
+        } catch {
             alert('Error al cambiar estado del cupón');
         }
     };
@@ -138,13 +139,12 @@ const AdminDashboard = () => {
         try {
             await axios.delete(`${API_URL}/api/coupons/${id}`, authHeaders);
             fetchCoupons();
-        } catch (e) {
+        } catch {
             alert('Error al eliminar cupón');
         }
     };
 
-    const pendingElections = elections.filter(e => e.approvalStatus === 'pending');
-    const approvedElections = elections.filter(e => e.approvalStatus === 'approved');
+    const pendingElections = elections.filter(e => e.requiresAdminReview && e.approvalStatus === 'pending');
     const rejectedElections = elections.filter(e => e.approvalStatus === 'rejected');
 
     const statusBadge = (status) => {
@@ -168,10 +168,24 @@ const AdminDashboard = () => {
                     <div className="flex items-center gap-3 mb-2 flex-wrap">
                         <h3 className="font-bold text-slate-900 text-lg truncate">{election.title}</h3>
                         {statusBadge(election.approvalStatus)}
+                        <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase ${election.processKind === 'survey' || election.questions?.length ? 'bg-cyan-100 text-cyan-800' : 'bg-blue-100 text-blue-800'}`}>
+                            {election.processKind === 'survey' || election.questions?.length ? 'Encuesta' : 'Votación'}
+                        </span>
+                        {election.plaza?.featuredInPlaza && (
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-sky-100 text-sky-700">
+                                Plaza Ciudadana
+                            </span>
+                        )}
+                        {election.requiresAdminReview && (
+                            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                                Auditoría Completa
+                            </span>
+                        )}
                     </div>
                     <div className="flex items-center gap-4 text-sm text-slate-500 flex-wrap">
                         <span className="flex items-center gap-1"><Activity size={14} /> {election.electionType || 'Tipo no definido'}</span>
                         <span className="flex items-center gap-1"><Clock size={14} /> {new Date(election.createdAt).toLocaleDateString('es-CL')}</span>
+                        <span className="font-bold text-slate-700">{(election.price ?? 0) === 0 ? 'Gratuito ($0)' : `${(election.price ?? 0).toLocaleString('es-CL')} CLP`}</span>
                         {election.organizer && (
                             <span className="flex items-center gap-1"><Mail size={14} /> {election.organizer.email}</span>
                         )}
@@ -264,13 +278,25 @@ const AdminDashboard = () => {
             </aside>
 
             <main className="flex-1 overflow-x-hidden p-6 md:p-8">
+                {loading && (
+                    <div className="mb-4 flex items-center gap-2 text-xs font-bold text-slate-400">
+                        <Loader2 size={14} className="animate-spin" /> Sincronizando datos...
+                    </div>
+                )}
                 {activeView === 'approvals' && (
                     <div className="space-y-4">
-                        <h2 className="text-2xl font-extrabold text-slate-900 mb-6">Peticiones Pendientes</h2>
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+                            <div>
+                                <h2 className="text-2xl font-extrabold text-slate-900">Auditorías Completas Pendientes</h2>
+                                <p className="text-xs text-slate-500 font-medium mt-1">
+                                    Las votaciones y encuestas estándar se aprueban automáticamente tras el pago. Aquí aparecen solo solicitudes con Paquete Completo de Auditorías.
+                                </p>
+                            </div>
+                        </div>
                         {pendingElections.length === 0 ? (
                             <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center">
                                 <CheckCircle className="text-emerald-400 mx-auto mb-4" size={48} />
-                                <p className="text-slate-500 font-medium">No hay peticiones pendientes.</p>
+                                <p className="text-slate-500 font-medium">No hay solicitudes con Paquete Completo de Auditorías pendientes.</p>
                             </div>
                         ) : pendingElections.map(e => <ElectionCard key={e._id} election={e} />)}
                     </div>
@@ -294,16 +320,16 @@ const AdminDashboard = () => {
                             };
                             const activeCount = elections.filter(e => e.status === 'active' && !isActuallyEnded(e)).length;
                             const endedCount = elections.filter(e => isActuallyEnded(e)).length;
-                            const pendingPaymentCount = elections.filter(e => e.approvalStatus === 'approved' && !e.isPaid).length;
+                            const pendingPaymentCount = elections.filter(e => (!e.requiresAdminReview || e.approvalStatus === 'approved') && !e.isPaid).length;
 
                             return (
-                                <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                                <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
                                     <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm flex flex-col items-center justify-center text-center">
                                         <p className="text-slate-500 text-[10px] font-black uppercase tracking-widest mb-1">Total</p>
                                         <p className="text-3xl font-black text-slate-900">{elections.length}</p>
                                     </div>
                                     <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm flex flex-col items-center justify-center text-center">
-                                        <p className="text-slate-500 text-[10px] font-black uppercase tracking-widest mb-1">Pend. Admin</p>
+                                        <p className="text-slate-500 text-[10px] font-black uppercase tracking-widest mb-1">Auditorías</p>
                                         <p className="text-3xl font-black text-amber-600">{pendingElections.length}</p>
                                     </div>
                                     <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm flex flex-col items-center justify-center text-center">
@@ -313,6 +339,10 @@ const AdminDashboard = () => {
                                     <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm flex flex-col items-center justify-center text-center">
                                         <p className="text-slate-500 text-[10px] font-black uppercase tracking-widest mb-1">Activas</p>
                                         <p className="text-3xl font-black text-emerald-600">{activeCount}</p>
+                                    </div>
+                                    <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm flex flex-col items-center justify-center text-center">
+                                        <p className="text-slate-500 text-[10px] font-black uppercase tracking-widest mb-1">Finalizadas</p>
+                                        <p className="text-3xl font-black text-slate-600">{endedCount}</p>
                                     </div>
                                     <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm flex flex-col items-center justify-center text-center">
                                         <p className="text-slate-500 text-[10px] font-black uppercase tracking-widest mb-1">Rechazadas</p>
@@ -479,7 +509,7 @@ const AdminDashboard = () => {
                                                         const newRole = u.role === 'admin' ? 'client' : 'admin';
                                                         await axios.put(`${API_URL}/api/users/${u._id}`, { role: newRole }, authHeaders);
                                                         fetchUsers();
-                                                    } catch (e) { alert('Error al cambiar rol'); }
+                                                    } catch { alert('Error al cambiar rol'); }
                                                 }} className="p-2 text-slate-400 hover:text-blue-500 transition-colors" title="Cambiar Rol">
                                                     <RefreshCw size={18} />
                                                 </button>
@@ -488,7 +518,7 @@ const AdminDashboard = () => {
                                                         try {
                                                             await axios.delete(`${API_URL}/api/users/${u._id}`, authHeaders);
                                                             fetchUsers();
-                                                        } catch (e) { alert('Error al eliminar usuario'); }
+                                                        } catch { alert('Error al eliminar usuario'); }
                                                     }
                                                 }} className="p-2 text-slate-400 hover:text-red-500 transition-colors">
                                                     <Trash2 size={18} />
@@ -535,13 +565,36 @@ const AdminDashboard = () => {
                             </div>
                             <div className="space-y-4">
                                 <h3 className="text-xl font-extrabold text-slate-900">Resultados</h3>
-                                <div className="space-y-4">
-                                    {reportData.results.map((res, i) => (
-                                        <div key={res._id} className="p-4 bg-slate-50 rounded-2xl flex justify-between items-center font-bold">
-                                            <span>{res.name}</span>
-                                            <span>{res.votes} votos</span>
-                                        </div>
-                                    ))}
+                                {reportData.questionResults && reportData.questionResults.length > 0 ? (
+                                    <div className="space-y-4">
+                                        {reportData.questionResults.map((qr, qIdx) => (
+                                            <div key={qr.questionId || qIdx} className="p-5 bg-slate-50 rounded-2xl border border-slate-200 space-y-2.5">
+                                                <p className="font-bold text-slate-900">{qIdx + 1}. {qr.prompt}</p>
+                                                {(qr.options || []).map((opt, optIdx) => (
+                                                    <div key={optIdx} className="bg-white p-3 rounded-xl border border-slate-100">
+                                                        <div className="flex justify-between text-xs font-bold text-slate-700 mb-1">
+                                                            <span>{opt.label}</span>
+                                                            <span>{opt.votes} votos ({opt.percentage}%)</span>
+                                                        </div>
+                                                        <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                                                            <div className="h-full bg-cyan-500 rounded-full" style={{ width: `${opt.percentage}%` }} />
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="space-y-4">
+                                        {reportData.results.map((res) => (
+                                            <div key={res._id} className="p-4 bg-slate-50 rounded-2xl flex justify-between items-center font-bold">
+                                                <span>{res.name}</span>
+                                                <span>{res.votes} votos</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                                <div className="space-y-3">
                                     <div className="p-4 bg-slate-100 rounded-2xl flex justify-between items-center italic">
                                         <span>Votos en Blanco</span>
                                         <span>{reportData.stats.blankVotes}</span>
