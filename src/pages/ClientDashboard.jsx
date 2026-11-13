@@ -39,15 +39,16 @@ const createEmptyQuestion = () => ({
 
 // ── New Election / Survey Modal ─────────────────────────────────────────────
 const NewElectionModal = ({ onClose, onCreated, token, initialProcessKind = 'election' }) => {
+    const isInitialSurvey = initialProcessKind === 'survey';
     const [form, setForm] = useState({
-        processKind: 'election',
+        processKind: isInitialSurvey ? 'survey' : 'election',
         title: '',
         description: '',
-        electionType: '',
+        electionType: isInitialSurvey ? (SURVEY_EVENT_TYPES[0] || '') : '',
         startDate: '',
         endDate: '',
         candidates: [],
-        questions: [],
+        questions: isInitialSurvey ? [createEmptyQuestion()] : [],
         votersCount: 100,
         modules: {
             virtualAssembly: false,
@@ -55,12 +56,12 @@ const NewElectionModal = ({ onClose, onCreated, token, initialProcessKind = 'ele
             fullAuditPackage: false
         },
         plaza: {
-            featuredInPlaza: false,
+            featuredInPlaza: isInitialSurvey,
             category: SURVEY_CATEGORIES[0],
             rewardPoints: 50
         },
         settings: {
-            allowAutoRegistration: false
+            allowAutoRegistration: isInitialSurvey
         },
         couponCode: ''
     });
@@ -119,18 +120,6 @@ const NewElectionModal = ({ onClose, onCreated, token, initialProcessKind = 'ele
         next[qIdx] = { ...next[qIdx], options: (next[qIdx].options || []).filter((_, idx) => idx !== optIdx) };
         return { ...f, questions: next };
     });
-
-    useEffect(() => {
-        if (initialProcessKind === 'survey') {
-            setForm(f => ({
-                ...f,
-                processKind: 'survey',
-                electionType: SURVEY_EVENT_TYPES[0] || f.electionType,
-                questions: f.questions?.length ? f.questions : [createEmptyQuestion()],
-                plaza: { ...(f.plaza || {}), featuredInPlaza: true }
-            }));
-        }
-    }, [initialProcessKind]);
 
     const [discount, setDiscount] = useState(0);
     const [validatingCoupon, setValidatingCoupon] = useState(false);
@@ -196,7 +185,7 @@ const NewElectionModal = ({ onClose, onCreated, token, initialProcessKind = 'ele
             }
 
             onCreated(); onClose();
-        } catch (err) { setError(err.response?.data?.error || 'Error al crear la solicitud.'); }
+        } catch (err) { setError(err.response?.data?.message || err.response?.data?.error || 'Error al crear la solicitud.'); }
         finally { setSaving(false); }
     };
 
@@ -250,7 +239,7 @@ const NewElectionModal = ({ onClose, onCreated, token, initialProcessKind = 'ele
                                     >
                                         <div className="flex items-center justify-between mb-1">
                                             <span className="font-black text-sm flex items-center gap-1.5"><Vote size={16} /> Votación Formal</span>
-                                            <span className="text-[11px] font-black text-blue-600">Base {formatCLP(PRICING_CATALOG.election.basePrice)}</span>
+                                            <span className="text-[11px] font-black text-blue-600">Base {formatCLP(PRICING_CATALOG.processes.election.baseFee)}</span>
                                         </div>
                                         <p className="text-xs opacity-80">Directivas, sindicatos, juntas, copropiedades y elecciones escolares.</p>
                                     </button>
@@ -261,7 +250,7 @@ const NewElectionModal = ({ onClose, onCreated, token, initialProcessKind = 'ele
                                     >
                                         <div className="flex items-center justify-between mb-1">
                                             <span className="font-black text-sm flex items-center gap-1.5"><MessageSquareText size={16} /> Encuesta Ciudadana</span>
-                                            <span className="text-[11px] font-black text-cyan-700">Base {formatCLP(PRICING_CATALOG.survey.basePrice)}</span>
+                                            <span className="text-[11px] font-black text-cyan-700">Base {formatCLP(PRICING_CATALOG.processes.survey.baseFee)}</span>
                                         </div>
                                         <p className="text-xs opacity-80">Cuestionarios multi-pregunta con publicación opcional en Plaza Ciudadana.</p>
                                     </button>
@@ -1454,6 +1443,7 @@ const ClientDashboard = () => {
         <>
             {showModal && (
                 <NewElectionModal
+                    key={modalProcessKind}
                     onClose={() => {
                         setShowModal(false);
                         setModalProcessKind('election');
