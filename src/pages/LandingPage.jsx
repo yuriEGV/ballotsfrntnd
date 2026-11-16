@@ -68,6 +68,26 @@ const pricingPlans = [
 ];
 
 const LandingPage = () => {
+    const hasAdminSession = Boolean(localStorage.getItem('adminToken'));
+    const hasCitizenSession = Boolean(localStorage.getItem('plazaToken'));
+    const adminRole = (() => {
+        try {
+            return JSON.parse(localStorage.getItem('adminUser') || '{}')?.role || '';
+        } catch {
+            return '';
+        }
+    })();
+    const primaryAuthTarget = hasAdminSession
+        ? (adminRole === 'admin' ? '/admin-dashboard' : '/dashboard')
+        : hasCitizenSession
+            ? '/plaza'
+            : '/login';
+    const primaryAuthLabel = hasAdminSession
+        ? (adminRole === 'admin' ? 'Panel Admin' : 'Mi Panel')
+        : hasCitizenSession
+            ? 'Mi Plaza'
+            : 'Ingresar';
+
     return (
         <div className="w-full bg-slate-50 min-h-screen">
             <nav className="fixed w-full flex justify-between items-center py-4 px-6 xl:px-32 bg-white/85 backdrop-blur-md z-50 border-b border-slate-200/50">
@@ -89,8 +109,8 @@ const LandingPage = () => {
                     <Link to="/plaza" className="lg:hidden px-3.5 py-2 bg-cyan-50 text-cyan-700 font-bold rounded-xl text-sm">
                         Plaza
                     </Link>
-                    <Link to="/login" className="px-5 py-2.5 bg-slate-900 text-white font-semibold rounded-xl hover:bg-slate-800 transition-all cursor-pointer">
-                        Ingresar
+                    <Link to={primaryAuthTarget} className="px-5 py-2.5 bg-slate-900 text-white font-semibold rounded-xl hover:bg-slate-800 transition-all cursor-pointer">
+                        {primaryAuthLabel}
                     </Link>
                 </div>
             </nav>
@@ -124,7 +144,7 @@ const LandingPage = () => {
 
                         <div className="flex flex-wrap gap-4">
                             <Link to="/plaza" className="px-7 py-4 bg-gradient-to-r from-cyan-500 to-blue-600 text-white font-bold rounded-xl shadow-lg shadow-cyan-500/25 hover:opacity-95 transition-all flex items-center gap-2">
-                                Explorar Plaza Ciudadana <MessageSquareText className="w-5 h-5" />
+                                {hasCitizenSession || hasAdminSession ? 'Ir a Plaza Ciudadana' : 'Ingresar a Plaza Ciudadana'} <MessageSquareText className="w-5 h-5" />
                             </Link>
                             <a href="#cotizador" className="px-7 py-4 bg-slate-900 text-white font-bold rounded-xl shadow-lg hover:bg-slate-800 transition-all flex items-center gap-2">
                                 Cotizar Proceso <ArrowRight className="w-5 h-5" />
@@ -134,7 +154,15 @@ const LandingPage = () => {
 
                     <div className="relative">
                         <div className="absolute inset-0 bg-gradient-to-tr from-blue-500/10 to-transparent rounded-3xl transform rotate-3 flex"></div>
-                        <img src="https://images.unsplash.com/photo-1573164713988-8665fc963095?auto=format&fit=crop&q=80&w=1200&h=800" alt="Ballots Einsoft App" className="rounded-3xl shadow-2xl relative z-10 w-full object-cover h-[500px]" />
+                        <img
+                            src="https://images.unsplash.com/photo-1573164713988-8665fc963095?auto=format&fit=crop&q=80&w=1200&h=800"
+                            alt="Ballots Einsoft App"
+                            width={1200}
+                            height={800}
+                            decoding="async"
+                            fetchPriority="high"
+                            className="rounded-3xl shadow-2xl relative z-10 w-full object-cover h-[500px]"
+                        />
                     </div>
                 </div>
             </section>

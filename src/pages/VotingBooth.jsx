@@ -170,7 +170,7 @@ const VotingBooth = () => {
                                     <a
                                         href={voteReceipt.web3.explorerUrl}
                                         target="_blank"
-                                        rel="noreferrer"
+                                        rel="noopener noreferrer"
                                         className="w-full mt-2 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-colors"
                                     >
                                         Verificar en Explorador Blockchain <ExternalLink size={14} />

@@ -1,10 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import axios from 'axios';
 import {
     Home, ClipboardList, Gift, User, History, RefreshCw, ShieldCheck,
     CheckCircle2, ExternalLink, Search, Sparkles, ArrowRight, BarChart3,
-    Loader2, Copy, Check, X, LogOut, Menu, Landmark
+    Loader2, Copy, Check, X, LogOut, Menu, Landmark, Lock, Mail, MapPin
 } from 'lucide-react';
 import { API_URL } from '../config.js';
 
@@ -22,6 +22,9 @@ const NAV_ITEMS = [
     { id: 'profile', label: 'Mis datos', icon: User },
     { id: 'history', label: 'Historial', icon: History }
 ];
+
+const authInputClass =
+    'w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:ring-4 focus:ring-sky-500/15 focus:border-sky-500 outline-none text-sm font-medium text-slate-900 placeholder:text-slate-400 transition-all';
 
 const ResultsPanel = ({ survey, results }) => {
     const data = results || survey?.results;
@@ -92,14 +95,7 @@ const PlazaCiudadana = () => {
     const [activeTab, setActiveTab] = useState('surveys');
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-    const [surveys, setSurveys] = useState([]);
-    const [categories, setCategories] = useState(['Ciudadanía']);
-    const [rewardsCatalog, setRewardsCatalog] = useState([]);
-    const [selectedCategory, setSelectedCategory] = useState('Todas');
-    const [searchTerm, setSearchTerm] = useState('');
-    const [loadingSurveys, setLoadingSurveys] = useState(true);
-    const [web3Status, setWeb3Status] = useState(null);
-
+    // ── Auth State (Plaza requires real authentication) ──────────────────────
     const [citizenToken, setCitizenToken] = useState(() => localStorage.getItem('plazaToken') || '');
     const [profile, setProfile] = useState(() => {
         try {
@@ -108,40 +104,66 @@ const PlazaCiudadana = () => {
             return null;
         }
     });
-
-    const orgToken = localStorage.getItem('adminToken');
-    const orgUser = (() => {
+    const [orgToken, setOrgToken] = useState(() => localStorage.getItem('adminToken') || '');
+    const [platformUser, setPlatformUser] = useState(() => {
         try {
-            return JSON.parse(localStorage.getItem('adminUser') || '{}');
+            const u = JSON.parse(localStorage.getItem('adminUser') || 'null');
+            return u?.email ? u : null;
         } catch {
-            return {};
+            return null;
         }
-    })();
-    const isAuthenticated = Boolean(orgToken && orgUser?.email);
-    const createSurveyTarget = isAuthenticated ? '/dashboard?new=survey' : '/login?next=%2Fdashboard%3Fnew%3Dsurvey';
-    const panelTarget = orgUser?.role === 'admin' ? '/admin-dashboard' : '/dashboard';
+    });
+    const [checkingAccess, setCheckingAccess] = useState(() =>
+        Boolean(localStorage.getItem('plazaToken') || localStorage.getItem('adminToken'))
+    );
 
-    // Modal de respuesta
+    // Citizen Auth Gate form states
+    const [authMode, setAuthMode] = useState('login'); // 'login' | 'register'
+    const [loginForm, setLoginForm] = useState({ identifier: '', password: '' });
+    const [regForm, setRegForm] = useState({
+        displayName: '',
+        cedula: '',
+        email: '',
+        commune: '',
+        region: '',
+        password: '',
+        confirmPassword: ''
+    });
+    const [authLoading, setAuthLoading] = useState(false);
+    const [authError, setAuthError] = useState('');
+
+    // Platform User 1-time RUT link form
+    const [linkForm, setLinkForm] = useState({ cedula: '', commune: '', region: '' });
+    const [linkingCedula, setLinkingCedula] = useState(false);
+
+    // Surveys & Rewards state
+    const [surveys, setSurveys] = useState([]);
+    const [categories, setCategories] = useState(['Ciudadanía']);
+    const [rewardsCatalog, setRewardsCatalog] = useState([]);
+    const [selectedCategory, setSelectedCategory] = useState('Todas');
+    const [searchTerm, setSearchTerm] = useState('');
+    const deferredSearch = useDeferredValue(searchTerm);
+    const [loadingSurveys, setLoadingSurveys] = useState(false);
+    const [web3Status, setWeb3Status] = useState(null);
+
+    // Response modal
     const [respondingSurvey, setRespondingSurvey] = useState(null);
     const [selectedCandidateId, setSelectedCandidateId] = useState('');
     const [multiAnswers, setMultiAnswers] = useState({});
-    const [quickCedula, setQuickCedula] = useState('');
-    const [quickAlias, setQuickAlias] = useState('');
     const [submittingVote, setSubmittingVote] = useState(false);
     const [voteError, setVoteError] = useState('');
     const [voteSuccess, setVoteSuccess] = useState(null);
 
-    // Modal de resultados
+    // Results modal
     const [resultsModalSurvey, setResultsModalSurvey] = useState(null);
 
-    // Formulario Mis Datos
-    const [profileForm, setProfileForm] = useState({
-        cedula: '',
-        displayName: '',
-        email: '',
-        commune: '',
-        region: ''
-    });
+    // Mis Datos form (only updates authenticated citizen's own profile)
+    const [profileForm, setProfileForm] = useState(() => ({
+        displayName: profile?.displayName || '',
+        email: profile?.email || '',
+        commune: profile?.commune || '',
+        region: profile?.region || ''
+    }));
     const [savingProfile, setSavingProfile] = useState(false);
     const [profileMsg, setProfileMsg] = useState('');
 
@@ -150,11 +172,42 @@ const PlazaCiudadana = () => {
     const [rewardMsg, setRewardMsg] = useState('');
     const [copiedCode, setCopiedCode] = useState('');
 
-    const loadPlazaData = useCallback(async () => {
+    const activeToken = citizenToken || orgToken;
+    const isAuthenticated = Boolean(citizenToken || (orgToken && platformUser));
+    const isOrgSession = Boolean(orgToken && platformUser);
+    const panelTarget = platformUser?.role === 'admin' ? '/admin-dashboard' : '/dashboard';
+    const createSurveyTarget = isOrgSession
+        ? '/dashboard?new=survey'
+        : '/login?next=%2Fdashboard%3Fnew%3Dsurvey';
+
+    const syncProfileState = useCallback((nextProfile) => {
+        if (!nextProfile) return;
+        setProfile(nextProfile);
+        localStorage.setItem('plazaProfile', JSON.stringify(nextProfile));
+        setProfileForm({
+            displayName: nextProfile.displayName || '',
+            email: nextProfile.email || '',
+            commune: nextProfile.commune || '',
+            region: nextProfile.region || ''
+        });
+    }, []);
+
+    const clearCitizenSession = useCallback(() => {
+        localStorage.removeItem('plazaToken');
+        localStorage.removeItem('plazaProfile');
+        setCitizenToken('');
+        setProfile(null);
+    }, []);
+
+    const loadPlazaData = useCallback(async (tokenOverride = '') => {
+        const authBearer = tokenOverride || citizenToken || orgToken;
+        if (!authBearer) return;
         setLoadingSurveys(true);
         try {
             const [surveysRes, web3Res] = await Promise.all([
-                axios.get(`${API_URL}/api/plaza/surveys`),
+                axios.get(`${API_URL}/api/plaza/surveys`, {
+                    headers: { Authorization: `Bearer ${authBearer}` }
+                }),
                 axios.get(`${API_URL}/api/ballots/web3-status`).catch(() => ({ data: { data: null } }))
             ]);
             const payload = surveysRes.data?.data || {};
@@ -165,44 +218,113 @@ const PlazaCiudadana = () => {
             setRewardsCatalog(payload.rewardsCatalog || []);
             setWeb3Status(web3Res.data?.data || null);
         } catch (err) {
-            console.error('Error loading Plaza surveys:', err);
+            if (err?.response?.status === 401 || err?.response?.status === 403) {
+                if (authBearer === citizenToken) {
+                    clearCitizenSession();
+                } else {
+                    localStorage.removeItem('adminToken');
+                    localStorage.removeItem('adminUser');
+                    setOrgToken('');
+                    setPlatformUser(null);
+                }
+            }
         } finally {
             setLoadingSurveys(false);
         }
-    }, []);
+    }, [citizenToken, orgToken, clearCitizenSession]);
 
     const loadCitizenProfile = useCallback(async (tokenToUse) => {
-        if (!tokenToUse) return;
+        if (!tokenToUse) return false;
         try {
             const res = await axios.get(`${API_URL}/api/plaza/profile/me`, {
                 headers: { Authorization: `Bearer ${tokenToUse}` }
             });
             const p = res.data?.data?.profile;
-            if (p) {
-                setProfile(p);
-                localStorage.setItem('plazaProfile', JSON.stringify(p));
-                setProfileForm((prev) => ({
-                    ...prev,
-                    displayName: p.displayName || '',
-                    email: p.email || '',
-                    commune: p.commune || '',
-                    region: p.region || ''
-                }));
-            }
+            if (p) syncProfileState(p);
             if (res.data?.data?.rewardsCatalog) {
                 setRewardsCatalog(res.data.data.rewardsCatalog);
             }
-        } catch {
-            // Token expirado o inválido
+            return true;
+        } catch (err) {
+            if (err?.response?.status === 401 || err?.response?.status === 403 || err?.response?.status === 404) {
+                clearCitizenSession();
+            }
+            return false;
         }
-    }, []);
+    }, [clearCitizenSession, syncProfileState]);
 
     useEffect(() => {
-        loadPlazaData();
-        if (citizenToken) {
-            loadCitizenProfile(citizenToken);
+        let cancelled = false;
+
+        async function bootstrapSession() {
+            let validToken = '';
+
+            if (citizenToken) {
+                const ok = await loadCitizenProfile(citizenToken);
+                if (ok) validToken = citizenToken;
+            }
+
+            if (!cancelled && !validToken && orgToken) {
+                try {
+                    const meRes = await axios.get(`${API_URL}/api/auth/me`, {
+                        headers: { Authorization: `Bearer ${orgToken}` }
+                    });
+                    const verifiedUser = meRes.data?.user;
+                    if (!cancelled && verifiedUser) {
+                        localStorage.setItem('adminUser', JSON.stringify(verifiedUser));
+                        setPlatformUser(verifiedUser);
+                        validToken = orgToken;
+
+                        // Automatically obtain citizen token if this platform user already linked a RUT
+                        const bridgeRes = await axios
+                            .post(
+                                `${API_URL}/api/plaza/auth/bridge`,
+                                {},
+                                { headers: { Authorization: `Bearer ${orgToken}` } }
+                            )
+                            .catch(() => null);
+                        const bridgeData = bridgeRes?.data?.data;
+                        if (!cancelled && bridgeData?.citizenToken) {
+                            setCitizenToken(bridgeData.citizenToken);
+                            localStorage.setItem('plazaToken', bridgeData.citizenToken);
+                            syncProfileState(bridgeData.profile);
+                            if (bridgeData.rewardsCatalog) {
+                                setRewardsCatalog(bridgeData.rewardsCatalog);
+                            }
+                            validToken = bridgeData.citizenToken;
+                        }
+                    }
+                } catch (err) {
+                    if (!cancelled && (err?.response?.status === 401 || err?.response?.status === 403)) {
+                        localStorage.removeItem('adminToken');
+                        localStorage.removeItem('adminUser');
+                        setOrgToken('');
+                        setPlatformUser(null);
+                    }
+                }
+            }
+
+            if (!cancelled && validToken) {
+                await loadPlazaData(validToken);
+            } else if (!cancelled) {
+                axios
+                    .get(`${API_URL}/api/ballots/web3-status`)
+                    .then((res) => {
+                        if (!cancelled) setWeb3Status(res.data?.data || null);
+                    })
+                    .catch(() => {});
+            }
+
+            if (!cancelled) {
+                setCheckingAccess(false);
+            }
         }
-    }, [loadPlazaData, loadCitizenProfile, citizenToken]);
+
+        bootstrapSession();
+        return () => {
+            cancelled = true;
+        };
+    }, [citizenToken, orgToken, loadCitizenProfile, loadPlazaData, syncProfileState]);
 
     const answeredSurveyIds = useMemo(() => {
         return new Set((profile?.history || []).map((h) => String(h.election)));
@@ -211,21 +333,109 @@ const PlazaCiudadana = () => {
     const filteredSurveys = useMemo(() => {
         return surveys.filter((s) => {
             const catMatch = selectedCategory === 'Todas' || s.category === selectedCategory;
-            const q = searchTerm.trim().toLowerCase();
+            const q = deferredSearch.trim().toLowerCase();
             const textMatch = !q || s.title?.toLowerCase().includes(q) || s.description?.toLowerCase().includes(q);
             return catMatch && textMatch;
         });
-    }, [surveys, selectedCategory, searchTerm]);
+    }, [surveys, selectedCategory, deferredSearch]);
 
     const openSurveysCount = surveys.filter((s) => s.isOpenWindow).length;
     const featuredSurvey = surveys.find((s) => s.isOpenWindow && !answeredSurveyIds.has(String(s._id))) || surveys[0] || null;
 
+    // ── Citizen Login / Register Handlers ────────────────────────────────────
+    const handleCitizenLogin = async (e) => {
+        e.preventDefault();
+        setAuthError('');
+        setAuthLoading(true);
+        try {
+            const res = await axios.post(`${API_URL}/api/plaza/auth/login`, loginForm);
+            const data = res.data?.data;
+            if (data?.citizenToken) {
+                localStorage.setItem('plazaToken', data.citizenToken);
+                setCitizenToken(data.citizenToken);
+                syncProfileState(data.profile);
+                if (data.rewardsCatalog) setRewardsCatalog(data.rewardsCatalog);
+                await loadPlazaData(data.citizenToken);
+            }
+        } catch (err) {
+            setAuthError(err.response?.data?.message || 'Credenciales incorrectas.');
+        } finally {
+            setAuthLoading(false);
+        }
+    };
+
+    const handleCitizenRegister = async (e) => {
+        e.preventDefault();
+        setAuthError('');
+        if (regForm.password !== regForm.confirmPassword) {
+            setAuthError('Las contraseñas no coinciden.');
+            return;
+        }
+        if (regForm.password.length < 8) {
+            setAuthError('La contraseña debe tener al menos 8 caracteres.');
+            return;
+        }
+        setAuthLoading(true);
+        try {
+            const res = await axios.post(`${API_URL}/api/plaza/auth/register`, {
+                displayName: regForm.displayName,
+                cedula: regForm.cedula,
+                email: regForm.email,
+                commune: regForm.commune,
+                region: regForm.region,
+                password: regForm.password
+            });
+            const data = res.data?.data;
+            if (data?.citizenToken) {
+                localStorage.setItem('plazaToken', data.citizenToken);
+                setCitizenToken(data.citizenToken);
+                syncProfileState(data.profile);
+                if (data.rewardsCatalog) setRewardsCatalog(data.rewardsCatalog);
+                await loadPlazaData(data.citizenToken);
+            }
+        } catch (err) {
+            setAuthError(err.response?.data?.message || 'No se pudo completar el registro ciudadano.');
+        } finally {
+            setAuthLoading(false);
+        }
+    };
+
+    const handleLinkOrgCedula = async (e) => {
+        e.preventDefault();
+        if (!orgToken) return;
+        setLinkingCedula(true);
+        setProfileMsg('');
+        try {
+            const res = await axios.post(`${API_URL}/api/plaza/auth/bridge`, linkForm, {
+                headers: { Authorization: `Bearer ${orgToken}` }
+            });
+            const data = res.data?.data;
+            if (data?.citizenToken) {
+                localStorage.setItem('plazaToken', data.citizenToken);
+                setCitizenToken(data.citizenToken);
+                syncProfileState(data.profile);
+                if (data.rewardsCatalog) setRewardsCatalog(data.rewardsCatalog);
+                setLinkForm({ cedula: '', commune: '', region: '' });
+                setProfileMsg('RUT vinculado a tu cuenta de forma segura.');
+            } else if (res.data?.requiresCedulaLink) {
+                setProfileMsg(res.data.message);
+            }
+        } catch (err) {
+            setProfileMsg(err.response?.data?.message || 'No se pudo vincular el RUT.');
+        } finally {
+            setLinkingCedula(false);
+        }
+    };
+
     const openRespondModal = (survey) => {
+        if (!citizenToken) {
+            setActiveTab('profile');
+            setProfileMsg('Vincula tu RUT en Mis datos para participar en encuestas y acumular puntos.');
+            return;
+        }
         setRespondingSurvey(survey);
         setSelectedCandidateId('');
         setMultiAnswers({});
-        setQuickCedula('');
-        setQuickAlias(profile?.displayName || '');
         setVoteError('');
         setVoteSuccess(null);
     };
@@ -246,7 +456,7 @@ const PlazaCiudadana = () => {
 
     const handleSubmitResponse = async (e) => {
         e.preventDefault();
-        if (!respondingSurvey) return;
+        if (!respondingSurvey || !citizenToken) return;
 
         setVoteError('');
         setSubmittingVote(true);
@@ -261,32 +471,24 @@ const PlazaCiudadana = () => {
                 }))
                 : null;
 
-            const headers = citizenToken ? { Authorization: `Bearer ${citizenToken}` } : {};
             const res = await axios.post(
                 `${API_URL}/api/plaza/surveys/${respondingSurvey._id}/respond`,
                 {
-                    ...(quickCedula.trim() ? { cedula: quickCedula.trim() } : {}),
-                    ...(quickAlias.trim() ? { displayName: quickAlias.trim() } : {}),
                     ...(hasQuestions ? { surveyAnswers } : { candidateId: selectedCandidateId })
                 },
-                { headers }
+                { headers: { Authorization: `Bearer ${citizenToken}` } }
             );
 
             const data = res.data?.data;
-            if (data?.citizenToken) {
-                setCitizenToken(data.citizenToken);
-                localStorage.setItem('plazaToken', data.citizenToken);
-            }
             if (data?.profile) {
-                setProfile(data.profile);
-                localStorage.setItem('plazaProfile', JSON.stringify(data.profile));
+                syncProfileState(data.profile);
             }
             setVoteSuccess({
                 pointsAwarded: data?.pointsAwarded || 50,
                 receipt: data?.receipt,
                 surveyResults: data?.surveyResults
             });
-            loadPlazaData();
+            loadPlazaData(activeToken);
         } catch (err) {
             setVoteError(err.response?.data?.message || err.response?.data?.error || 'No se pudo registrar tu participación.');
         } finally {
@@ -296,22 +498,18 @@ const PlazaCiudadana = () => {
 
     const handleSaveProfile = async (e) => {
         e.preventDefault();
+        if (!citizenToken) return;
         setSavingProfile(true);
         setProfileMsg('');
         try {
-            const headers = citizenToken ? { Authorization: `Bearer ${citizenToken}` } : {};
-            const res = await axios.post(`${API_URL}/api/plaza/profile`, profileForm, { headers });
+            const res = await axios.post(`${API_URL}/api/plaza/profile`, profileForm, {
+                headers: { Authorization: `Bearer ${citizenToken}` }
+            });
             const data = res.data?.data;
-            if (data?.citizenToken) {
-                setCitizenToken(data.citizenToken);
-                localStorage.setItem('plazaToken', data.citizenToken);
-            }
             if (data?.profile) {
-                setProfile(data.profile);
-                localStorage.setItem('plazaProfile', JSON.stringify(data.profile));
+                syncProfileState(data.profile);
             }
-            setProfileForm((prev) => ({ ...prev, cedula: '' }));
-            setProfileMsg('Datos guardados y sesión ciudadana vinculada correctamente.');
+            setProfileMsg('Tus datos fueron actualizados correctamente.');
         } catch (err) {
             setProfileMsg(err.response?.data?.message || 'Error al guardar tus datos.');
         } finally {
@@ -322,7 +520,7 @@ const PlazaCiudadana = () => {
     const handleRedeem = async (rewardId) => {
         if (!citizenToken) {
             setActiveTab('profile');
-            setProfileMsg('Ingresa tu RUT en Mis datos para canjear recompensas.');
+            setProfileMsg('Vincula tu RUT en Mis datos para canjear recompensas.');
             return;
         }
         setRedeemingId(rewardId);
@@ -335,8 +533,7 @@ const PlazaCiudadana = () => {
             );
             const data = res.data?.data;
             if (data?.profile) {
-                setProfile(data.profile);
-                localStorage.setItem('plazaProfile', JSON.stringify(data.profile));
+                syncProfileState(data.profile);
             }
             if (data?.redeemed) {
                 setRewardMsg(`¡Canje exitoso! Tu código es ${data.redeemed.code}`);
@@ -348,12 +545,13 @@ const PlazaCiudadana = () => {
         }
     };
 
-    const handleLogoutCitizen = () => {
-        localStorage.removeItem('plazaToken');
-        localStorage.removeItem('plazaProfile');
-        setCitizenToken('');
-        setProfile(null);
-        setProfileForm({ cedula: '', displayName: '', email: '', commune: '', region: '' });
+    const handleFullLogout = () => {
+        clearCitizenSession();
+        localStorage.removeItem('adminToken');
+        localStorage.removeItem('adminUser');
+        setOrgToken('');
+        setPlatformUser(null);
+        setSurveys([]);
     };
 
     const copyText = (code) => {
@@ -362,7 +560,235 @@ const PlazaCiudadana = () => {
         setTimeout(() => setCopiedCode(''), 2000);
     };
 
-    const displayName = profile?.displayName || 'Ciudadano';
+    // ── Loading Gate ─────────────────────────────────────────────────────────
+    if (checkingAccess) {
+        return (
+            <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+                <div className="bg-white rounded-3xl border border-slate-200 p-8 shadow-xl text-center space-y-3 max-w-sm w-full">
+                    <Loader2 className="animate-spin text-sky-500 mx-auto" size={32} />
+                    <p className="font-bold text-slate-800 text-sm">Verificando sesión de Plaza Ciudadana...</p>
+                </div>
+            </div>
+        );
+    }
+
+    // ── Unauthenticated Security Gate ────────────────────────────────────────
+    if (!isAuthenticated) {
+        return (
+            <div className="min-h-screen bg-slate-50 flex flex-col">
+                <header className="bg-white border-b border-slate-200 px-4 md:px-8 py-3.5 flex items-center justify-between">
+                    <Link to="/" className="flex items-center gap-2.5">
+                        <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-sky-500 to-blue-600 flex items-center justify-center text-white shadow-sm">
+                            <Landmark size={18} />
+                        </div>
+                        <div>
+                            <span className="font-black text-lg tracking-tight text-slate-900">
+                                PLAZA <span className="text-sky-600">CIUDADANA</span>
+                            </span>
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest leading-none">
+                                Ballots Einsoft · Web3
+                            </p>
+                        </div>
+                    </Link>
+                    <div className="flex items-center gap-3">
+                        {web3Status?.configured && (
+                            <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-bold">
+                                <ShieldCheck size={14} /> {web3Status.networkName}
+                            </span>
+                        )}
+                        <Link to="/" className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold">
+                            Inicio
+                        </Link>
+                    </div>
+                </header>
+
+                <main className="flex-1 flex items-center justify-center p-4 py-10">
+                    <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-md w-full overflow-hidden">
+                        <div className="bg-gradient-to-r from-sky-600 to-blue-700 px-8 py-7 text-center text-white">
+                            <div className="w-12 h-12 bg-white/15 rounded-2xl flex items-center justify-center mx-auto mb-3">
+                                <Lock size={24} />
+                            </div>
+                            <h1 className="text-2xl font-black tracking-tight">Acceso Ciudadano</h1>
+                            <p className="text-xs text-sky-100 mt-1.5">
+                                Ingresa con tu cuenta para responder encuestas Web3, acumular puntos y proteger tus recompensas.
+                            </p>
+                        </div>
+
+                        <div className="flex border-b border-slate-100">
+                            <button
+                                type="button"
+                                onClick={() => { setAuthMode('login'); setAuthError(''); }}
+                                className={`flex-1 py-3.5 text-sm font-bold transition-colors ${
+                                    authMode === 'login'
+                                        ? 'text-sky-600 border-b-2 border-sky-600 bg-sky-50/50'
+                                        : 'text-slate-500 hover:text-slate-800'
+                                }`}
+                            >
+                                Iniciar Sesión
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => { setAuthMode('register'); setAuthError(''); }}
+                                className={`flex-1 py-3.5 text-sm font-bold transition-colors ${
+                                    authMode === 'register'
+                                        ? 'text-sky-600 border-b-2 border-sky-600 bg-sky-50/50'
+                                        : 'text-slate-500 hover:text-slate-800'
+                                }`}
+                            >
+                                Crear Cuenta
+                            </button>
+                        </div>
+
+                        <div className="p-7 space-y-5">
+                            {authMode === 'login' ? (
+                                <form onSubmit={handleCitizenLogin} className="space-y-4">
+                                    <div>
+                                        <label className="text-xs font-bold text-slate-600 uppercase mb-1.5 flex items-center gap-1.5">
+                                            <Mail size={13} className="text-sky-600" /> Correo o RUT
+                                        </label>
+                                        <input
+                                            required
+                                            value={loginForm.identifier}
+                                            onChange={(e) => setLoginForm({ ...loginForm, identifier: e.target.value })}
+                                            placeholder="tu@correo.cl o 12.345.678-9"
+                                            className={authInputClass}
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="text-xs font-bold text-slate-600 uppercase mb-1.5 flex items-center gap-1.5">
+                                            <Lock size={13} className="text-sky-600" /> Contraseña
+                                        </label>
+                                        <input
+                                            required
+                                            type="password"
+                                            value={loginForm.password}
+                                            onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })}
+                                            placeholder="••••••••"
+                                            className={authInputClass}
+                                        />
+                                    </div>
+                                    <button
+                                        type="submit"
+                                        disabled={authLoading}
+                                        className="w-full py-3.5 bg-sky-600 hover:bg-sky-700 text-white rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-60 shadow-lg shadow-sky-600/20"
+                                    >
+                                        {authLoading ? <Loader2 size={18} className="animate-spin" /> : 'Ingresar a Plaza Ciudadana'}
+                                    </button>
+                                </form>
+                            ) : (
+                                <form onSubmit={handleCitizenRegister} className="space-y-3.5">
+                                    <div>
+                                        <label className="text-xs font-bold text-slate-600 uppercase mb-1 block">Nombre Completo *</label>
+                                        <input
+                                            required
+                                            value={regForm.displayName}
+                                            onChange={(e) => setRegForm({ ...regForm, displayName: e.target.value })}
+                                            placeholder="ej: Camila Rojas"
+                                            className={authInputClass}
+                                        />
+                                    </div>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="text-xs font-bold text-slate-600 uppercase mb-1 block">RUT / Cédula *</label>
+                                            <input
+                                                required
+                                                value={regForm.cedula}
+                                                onChange={(e) => setRegForm({ ...regForm, cedula: e.target.value })}
+                                                placeholder="12.345.678-5"
+                                                className={authInputClass}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs font-bold text-slate-600 uppercase mb-1 block">Correo *</label>
+                                            <input
+                                                required
+                                                type="email"
+                                                value={regForm.email}
+                                                onChange={(e) => setRegForm({ ...regForm, email: e.target.value })}
+                                                placeholder="tu@correo.cl"
+                                                className={authInputClass}
+                                            />
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="text-xs font-bold text-slate-600 uppercase mb-1 flex items-center gap-1">
+                                                <MapPin size={11} /> Comuna
+                                            </label>
+                                            <input
+                                                value={regForm.commune}
+                                                onChange={(e) => setRegForm({ ...regForm, commune: e.target.value })}
+                                                placeholder="Santiago"
+                                                className={authInputClass}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs font-bold text-slate-600 uppercase mb-1 block">Región</label>
+                                            <input
+                                                value={regForm.region}
+                                                onChange={(e) => setRegForm({ ...regForm, region: e.target.value })}
+                                                placeholder="RM"
+                                                className={authInputClass}
+                                            />
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="text-xs font-bold text-slate-600 uppercase mb-1 block">Contraseña (mín. 8 caracteres) *</label>
+                                        <input
+                                            required
+                                            minLength={8}
+                                            type="password"
+                                            value={regForm.password}
+                                            onChange={(e) => setRegForm({ ...regForm, password: e.target.value })}
+                                            placeholder="Mínimo 8 caracteres"
+                                            className={authInputClass}
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="text-xs font-bold text-slate-600 uppercase mb-1 block">Confirmar Contraseña *</label>
+                                        <input
+                                            required
+                                            minLength={8}
+                                            type="password"
+                                            value={regForm.confirmPassword}
+                                            onChange={(e) => setRegForm({ ...regForm, confirmPassword: e.target.value })}
+                                            placeholder="Repite tu contraseña"
+                                            className={authInputClass}
+                                        />
+                                    </div>
+                                    <button
+                                        type="submit"
+                                        disabled={authLoading}
+                                        className="w-full py-3.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold text-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-60"
+                                    >
+                                        {authLoading ? <Loader2 size={18} className="animate-spin" /> : 'Registrarme y Entrar'}
+                                    </button>
+                                </form>
+                            )}
+
+                            {authError && (
+                                <p className="text-red-600 text-xs font-bold bg-red-50 border border-red-200 rounded-xl p-3 text-center">
+                                    {authError}
+                                </p>
+                            )}
+
+                            <div className="pt-3 border-t border-slate-100 text-center space-y-2">
+                                <p className="text-xs text-slate-500">¿Organizas votaciones o administras encuestas?</p>
+                                <Link
+                                    to="/login?next=%2Fplaza"
+                                    className="inline-flex items-center justify-center gap-1.5 text-xs font-bold text-blue-600 hover:underline"
+                                >
+                                    Ingresar como Organizador / Administrador <ArrowRight size={13} />
+                                </Link>
+                            </div>
+                        </div>
+                    </div>
+                </main>
+            </div>
+        );
+    }
+
+    const displayName = profile?.displayName || platformUser?.username || 'Ciudadano';
     const points = profile?.points || 0;
 
     return (
@@ -398,13 +824,15 @@ const PlazaCiudadana = () => {
                             <ShieldCheck size={14} /> {web3Status.networkName}
                         </span>
                     )}
-                    <Link to={createSurveyTarget} className="text-xs font-bold text-slate-600 hover:text-blue-600 hidden sm:inline">
-                        Crear Encuesta / Votación
-                    </Link>
-                    {isAuthenticated && (
-                        <Link to={panelTarget} className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-colors hidden sm:inline">
-                            {orgUser?.role === 'admin' ? 'Panel Admin' : 'Mi Panel'}
-                        </Link>
+                    {isOrgSession && (
+                        <>
+                            <Link to={createSurveyTarget} className="text-xs font-bold text-slate-600 hover:text-blue-600 hidden sm:inline">
+                                Crear Encuesta / Votación
+                            </Link>
+                            <Link to={panelTarget} className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold transition-colors hidden sm:inline">
+                                {platformUser?.role === 'admin' ? 'Panel Admin' : 'Mi Panel'}
+                            </Link>
+                        </>
                     )}
                     <Link to="/" className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors">
                         Inicio
@@ -422,7 +850,7 @@ const PlazaCiudadana = () => {
                     <span>Tienes <strong className="text-sky-600">{points}</strong> puntos</span>
                     <button
                         type="button"
-                        onClick={() => { loadPlazaData(); if (citizenToken) loadCitizenProfile(citizenToken); }}
+                        onClick={() => { loadPlazaData(activeToken); if (citizenToken) loadCitizenProfile(citizenToken); }}
                         title="Actualizar"
                         className="text-sky-600 hover:rotate-90 transition-transform"
                     >
@@ -432,7 +860,7 @@ const PlazaCiudadana = () => {
             </div>
 
             <div className="flex-1 flex relative">
-                {/* Left Sidebar matching Cadem layout */}
+                {/* Left Sidebar */}
                 <aside className={`${mobileMenuOpen ? 'block absolute inset-y-0 left-0 z-40 shadow-2xl' : 'hidden'} md:block w-64 bg-white border-r border-slate-200 shrink-0`}>
                     <div className="p-6 flex flex-col items-center text-center border-b border-slate-100">
                         <div className="w-20 h-20 rounded-full bg-sky-100 text-sky-700 flex items-center justify-center text-2xl font-black mb-3 border-4 border-sky-50">
@@ -440,7 +868,9 @@ const PlazaCiudadana = () => {
                         </div>
                         <h2 className="font-bold text-slate-900 text-lg truncate max-w-full">{displayName}</h2>
                         <p className="text-xs text-slate-500 mt-0.5">
-                            {profile ? `${profile.participationsCount || 0} participaciones` : 'Invitado · Identifícate en Mis datos'}
+                            {profile
+                                ? `${profile.participationsCount || 0} participaciones`
+                                : 'Sesión Organización · Vincula tu RUT'}
                         </p>
                     </div>
 
@@ -466,17 +896,15 @@ const PlazaCiudadana = () => {
                         })}
                     </nav>
 
-                    {citizenToken && (
-                        <div className="p-4 mt-4 border-t border-slate-100">
-                            <button
-                                type="button"
-                                onClick={handleLogoutCitizen}
-                                className="w-full flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs font-bold text-slate-500 hover:bg-red-50 hover:text-red-600 transition-colors"
-                            >
-                                <LogOut size={14} /> Cambiar Ciudadano
-                            </button>
-                        </div>
-                    )}
+                    <div className="p-4 mt-4 border-t border-slate-100">
+                        <button
+                            type="button"
+                            onClick={handleFullLogout}
+                            className="w-full flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl text-xs font-bold text-slate-500 hover:bg-red-50 hover:text-red-600 transition-colors"
+                        >
+                            <LogOut size={14} /> Cerrar Sesión
+                        </button>
+                    </div>
                 </aside>
 
                 {/* Main Content Area */}
@@ -490,7 +918,7 @@ const PlazaCiudadana = () => {
                                         Plaza Ciudadana en Vivo
                                     </span>
                                     <h1 className="text-2xl md:text-3xl font-black text-slate-900">
-                                        ¡Bienvenido{profile ? `, ${displayName}` : ''}!
+                                        ¡Bienvenido, {displayName}!
                                     </h1>
                                     <p className="text-slate-600 text-sm max-w-xl">
                                         Tu voz cuenta con respaldo criptográfico. Responde consultas abiertas, gana puntos cívicos y canjea beneficios reales o cupones para tus propios eventos.
@@ -588,12 +1016,13 @@ const PlazaCiudadana = () => {
                                         value={searchTerm}
                                         onChange={(e) => setSearchTerm(e.target.value)}
                                         placeholder="Buscar encuesta..."
-                                        className="w-full pl-10 pr-4 py-2.5 rounded-xl bg-white border border-slate-200 text-sm outline-none focus:border-sky-500"
+                                        className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 bg-white text-sm outline-none focus:border-sky-500"
                                     />
                                 </div>
                             </div>
 
-                            <div className="flex gap-2 flex-wrap">
+                            {/* Category pills */}
+                            <div className="flex flex-wrap gap-2">
                                 {['Todas', ...categories].map((cat) => (
                                     <button
                                         key={cat}
@@ -611,7 +1040,7 @@ const PlazaCiudadana = () => {
                             </div>
 
                             {loadingSurveys ? (
-                                <div className="bg-white rounded-3xl border border-slate-200 p-16 text-center">
+                                <div className="py-16 text-center">
                                     <Loader2 className="animate-spin text-sky-500 mx-auto" size={36} />
                                 </div>
                             ) : filteredSurveys.length === 0 ? (
@@ -621,9 +1050,11 @@ const PlazaCiudadana = () => {
                                     <p className="text-sm text-slate-500 max-w-md mx-auto">
                                         Cuando una organización publique una encuesta ciudadana aparecerá aquí automáticamente.
                                     </p>
-                                    <Link to={createSurveyTarget} className="inline-flex items-center gap-2 px-5 py-2.5 bg-sky-500 text-white rounded-xl text-sm font-bold hover:bg-sky-600">
-                                        Crear la primera encuesta <ArrowRight size={15} />
-                                    </Link>
+                                    {isOrgSession && (
+                                        <Link to={createSurveyTarget} className="inline-flex items-center gap-2 px-5 py-2.5 bg-sky-500 text-white rounded-xl text-sm font-bold hover:bg-sky-600">
+                                            Crear la primera encuesta <ArrowRight size={15} />
+                                        </Link>
+                                    )}
                                 </div>
                             ) : (
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -741,7 +1172,7 @@ const PlazaCiudadana = () => {
                                                 {redeemingId === reward.id
                                                     ? 'Canjeando...'
                                                     : !citizenToken
-                                                        ? 'Identifícate para canjear'
+                                                        ? 'Vincula tu RUT para canjear'
                                                         : canAfford
                                                             ? `Canjear por ${reward.pointsCost} pts`
                                                             : `Te faltan ${reward.pointsCost - points} pts`}
@@ -784,83 +1215,125 @@ const PlazaCiudadana = () => {
                             <div>
                                 <h2 className="text-2xl font-black text-slate-900">Mis datos</h2>
                                 <p className="text-sm text-slate-500 mt-1">
-                                    Vincula tu RUT / Cédula para guardar tus puntos e historial y responder encuestas en 1 clic. Nunca vinculamos tu RUT a tus respuestas elegidas.
+                                    Tu perfil ciudadano protege tus puntos cívicos e historial sin exponer tus respuestas elegidas.
                                 </p>
                             </div>
 
-                            {profile?.maskedCedula && (
-                                <div className="bg-sky-50 border border-sky-200 rounded-2xl p-3.5 text-xs text-sky-800 font-semibold">
-                                    Sesión activa asociada a RUT terminado en {profile.maskedCedula.replace('••••', '')}.
-                                </div>
+                            {!citizenToken && isOrgSession ? (
+                                <form onSubmit={handleLinkOrgCedula} className="space-y-4">
+                                    <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-xs text-amber-900 font-semibold">
+                                        Ingresaste con tu cuenta de organización ({platformUser?.email}). Vincula tu RUT personal por única vez para poder votar y acumular puntos.
+                                    </div>
+                                    <div>
+                                        <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Tu RUT / Cédula *</label>
+                                        <input
+                                            required
+                                            value={linkForm.cedula}
+                                            onChange={(e) => setLinkForm({ ...linkForm, cedula: e.target.value })}
+                                            placeholder="12.345.678-5"
+                                            className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-sky-500 outline-none text-sm"
+                                        />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Comuna</label>
+                                            <input
+                                                value={linkForm.commune}
+                                                onChange={(e) => setLinkForm({ ...linkForm, commune: e.target.value })}
+                                                placeholder="Providencia"
+                                                className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-sky-500 outline-none text-sm"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Región</label>
+                                            <input
+                                                value={linkForm.region}
+                                                onChange={(e) => setLinkForm({ ...linkForm, region: e.target.value })}
+                                                placeholder="Metropolitana"
+                                                className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-sky-500 outline-none text-sm"
+                                            />
+                                        </div>
+                                    </div>
+                                    {profileMsg && (
+                                        <p className="text-sm font-semibold text-sky-700 bg-sky-50 border border-sky-200 rounded-xl p-3">
+                                            {profileMsg}
+                                        </p>
+                                    )}
+                                    <button
+                                        type="submit"
+                                        disabled={linkingCedula}
+                                        className="w-full py-3.5 bg-sky-500 hover:bg-sky-600 text-white rounded-xl font-bold text-sm transition-colors disabled:opacity-60"
+                                    >
+                                        {linkingCedula ? 'Vinculando...' : 'Vincular Mi RUT'}
+                                    </button>
+                                </form>
+                            ) : (
+                                <>
+                                    {profile?.maskedCedula && (
+                                        <div className="bg-sky-50 border border-sky-200 rounded-2xl p-3.5 text-xs text-sky-800 font-semibold flex items-center justify-between">
+                                            <span>Identidad verificada · RUT terminado en {profile.maskedCedula.replace('••••', '')}</span>
+                                            <ShieldCheck size={16} className="text-sky-600" />
+                                        </div>
+                                    )}
+
+                                    <form onSubmit={handleSaveProfile} className="space-y-4">
+                                        <div>
+                                            <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Nombre o Alias *</label>
+                                            <input
+                                                required
+                                                value={profileForm.displayName}
+                                                onChange={(e) => setProfileForm({ ...profileForm, displayName: e.target.value })}
+                                                placeholder="ej: Camila Rojas"
+                                                className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-sky-500 outline-none text-sm"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Correo electrónico</label>
+                                            <input
+                                                type="email"
+                                                value={profileForm.email}
+                                                onChange={(e) => setProfileForm({ ...profileForm, email: e.target.value })}
+                                                placeholder="tu@correo.cl"
+                                                className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-sky-500 outline-none text-sm"
+                                            />
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Comuna</label>
+                                                <input
+                                                    value={profileForm.commune}
+                                                    onChange={(e) => setProfileForm({ ...profileForm, commune: e.target.value })}
+                                                    placeholder="Providencia"
+                                                    className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-sky-500 outline-none text-sm"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Región</label>
+                                                <input
+                                                    value={profileForm.region}
+                                                    onChange={(e) => setProfileForm({ ...profileForm, region: e.target.value })}
+                                                    placeholder="Metropolitana"
+                                                    className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-sky-500 outline-none text-sm"
+                                                />
+                                            </div>
+                                        </div>
+
+                                        {profileMsg && (
+                                            <p className="text-sm font-semibold text-sky-700 bg-sky-50 border border-sky-200 rounded-xl p-3">
+                                                {profileMsg}
+                                            </p>
+                                        )}
+
+                                        <button
+                                            type="submit"
+                                            disabled={savingProfile}
+                                            className="w-full py-3.5 bg-sky-500 hover:bg-sky-600 text-white rounded-xl font-bold text-sm transition-colors disabled:opacity-60"
+                                        >
+                                            {savingProfile ? 'Guardando...' : 'Guardar Mis Datos'}
+                                        </button>
+                                    </form>
+                                </>
                             )}
-
-                            <form onSubmit={handleSaveProfile} className="space-y-4">
-                                <div>
-                                    <label className="text-xs font-bold text-slate-600 uppercase block mb-1">
-                                        RUT / Cédula {citizenToken ? '(Opcional para actualizar otros datos)' : '*'}
-                                    </label>
-                                    <input
-                                        required={!citizenToken}
-                                        value={profileForm.cedula}
-                                        onChange={(e) => setProfileForm({ ...profileForm, cedula: e.target.value })}
-                                        placeholder="12.345.678-9"
-                                        className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-sky-500 outline-none text-sm"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Nombre o Alias</label>
-                                    <input
-                                        value={profileForm.displayName}
-                                        onChange={(e) => setProfileForm({ ...profileForm, displayName: e.target.value })}
-                                        placeholder="ej: yurie"
-                                        className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-sky-500 outline-none text-sm"
-                                    />
-                                </div>
-                                <div>
-                                    <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Correo electrónico</label>
-                                    <input
-                                        type="email"
-                                        value={profileForm.email}
-                                        onChange={(e) => setProfileForm({ ...profileForm, email: e.target.value })}
-                                        placeholder="tu@correo.cl"
-                                        className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-sky-500 outline-none text-sm"
-                                    />
-                                </div>
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Comuna</label>
-                                        <input
-                                            value={profileForm.commune}
-                                            onChange={(e) => setProfileForm({ ...profileForm, commune: e.target.value })}
-                                            placeholder="Providencia"
-                                            className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-sky-500 outline-none text-sm"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Región</label>
-                                        <input
-                                            value={profileForm.region}
-                                            onChange={(e) => setProfileForm({ ...profileForm, region: e.target.value })}
-                                            placeholder="Metropolitana"
-                                            className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:border-sky-500 outline-none text-sm"
-                                        />
-                                    </div>
-                                </div>
-
-                                {profileMsg && (
-                                    <p className="text-sm font-semibold text-sky-700 bg-sky-50 border border-sky-200 rounded-xl p-3">
-                                        {profileMsg}
-                                    </p>
-                                )}
-
-                                <button
-                                    type="submit"
-                                    disabled={savingProfile}
-                                    className="w-full py-3.5 bg-sky-500 hover:bg-sky-600 text-white rounded-xl font-bold text-sm transition-colors disabled:opacity-60"
-                                >
-                                    {savingProfile ? 'Guardando...' : 'Guardar Mis Datos'}
-                                </button>
-                            </form>
                         </div>
                     )}
 
@@ -871,8 +1344,8 @@ const PlazaCiudadana = () => {
                             {(!profile || (profile.history || []).length === 0) ? (
                                 <div className="bg-white rounded-3xl border border-slate-200 p-12 text-center space-y-2">
                                     <History size={40} className="text-slate-300 mx-auto" />
-                                    <p className="font-bold text-slate-700">Aún no registras participaciones en esta sesión.</p>
-                                    <p className="text-xs text-slate-500">Responde una encuesta o identifícate en Mis datos con el RUT que usaste antes.</p>
+                                    <p className="font-bold text-slate-700">Aún no registras participaciones en tu cuenta.</p>
+                                    <p className="text-xs text-slate-500">Cada encuesta respondida quedará respaldada aquí con su comprobante Web3.</p>
                                 </div>
                             ) : (
                                 <div className="space-y-3">
@@ -898,7 +1371,7 @@ const PlazaCiudadana = () => {
                                                 <a
                                                     href={item.explorerUrl}
                                                     target="_blank"
-                                                    rel="noreferrer"
+                                                    rel="noopener noreferrer"
                                                     className="px-4 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-xl text-xs font-bold flex items-center gap-1.5 shrink-0"
                                                 >
                                                     Ver TX Blockchain <ExternalLink size={13} />
@@ -954,7 +1427,7 @@ const PlazaCiudadana = () => {
                                                 <a
                                                     href={voteSuccess.receipt.web3.explorerUrl}
                                                     target="_blank"
-                                                    rel="noreferrer"
+                                                    rel="noopener noreferrer"
                                                     className="inline-flex items-center gap-1.5 text-sky-300 hover:underline font-bold"
                                                 >
                                                     Ver en Polygonscan <ExternalLink size={12} />
@@ -984,28 +1457,10 @@ const PlazaCiudadana = () => {
                                         <p className="text-sm text-slate-600">{respondingSurvey.description}</p>
                                     )}
 
-                                    {!citizenToken && (
-                                        <div className="bg-sky-50 border border-sky-100 rounded-2xl p-4 space-y-3">
-                                            <p className="text-xs text-sky-800 font-semibold">
-                                                Ingresa tu RUT / Cédula para validar 1 respuesta única por ciudadano (jamás se asocia públicamente a tu opinión).
-                                            </p>
-                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                                <input
-                                                    required
-                                                    value={quickCedula}
-                                                    onChange={(e) => setQuickCedula(e.target.value)}
-                                                    placeholder="RUT o Cédula *"
-                                                    className="px-3.5 py-2.5 rounded-xl border border-sky-200 bg-white text-sm outline-none"
-                                                />
-                                                <input
-                                                    value={quickAlias}
-                                                    onChange={(e) => setQuickAlias(e.target.value)}
-                                                    placeholder="Alias o Nombre (opcional)"
-                                                    className="px-3.5 py-2.5 rounded-xl border border-sky-200 bg-white text-sm outline-none"
-                                                />
-                                            </div>
-                                        </div>
-                                    )}
+                                    <div className="bg-sky-50 border border-sky-100 rounded-2xl p-3.5 text-xs text-sky-800 font-semibold flex items-center gap-2">
+                                        <ShieldCheck size={16} className="text-sky-600 shrink-0" />
+                                        Participación protegida con nullifier único anónimo para tu cuenta verificada.
+                                    </div>
 
                                     {Array.isArray(respondingSurvey.questions) && respondingSurvey.questions.length > 0 ? (
                                         <div className="space-y-4">
@@ -1117,4 +1572,3 @@ const PlazaCiudadana = () => {
 };
 
 export default PlazaCiudadana;
-

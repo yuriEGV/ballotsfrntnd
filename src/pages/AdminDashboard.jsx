@@ -33,10 +33,15 @@ const AdminDashboard = () => {
     const authHeaders = useMemo(() => ({ headers: { Authorization: `Bearer ${token}` } }), [token]);
 
     const handleAuthError = useCallback((err) => {
-        if (err?.response?.status === 401) {
+        const status = err?.response?.status;
+        if (status === 401) {
             localStorage.removeItem('adminToken');
             localStorage.removeItem('adminUser');
             navigate('/login?next=%2Fadmin-dashboard', { replace: true });
+            return true;
+        }
+        if (status === 403) {
+            navigate('/dashboard', { replace: true });
             return true;
         }
         return false;
@@ -78,7 +83,20 @@ const AdminDashboard = () => {
     }, [token, authHeaders, handleAuthError]);
 
     useEffect(() => {
-        if (!token) { navigate('/login?next=%2Fadmin-dashboard'); return; }
+        if (!token) {
+            navigate('/login?next=%2Fadmin-dashboard', { replace: true });
+            return;
+        }
+        try {
+            const storedUser = JSON.parse(localStorage.getItem('adminUser') || '{}');
+            if (storedUser?.role && storedUser.role !== 'admin') {
+                navigate('/dashboard', { replace: true });
+                return;
+            }
+        } catch {
+            navigate('/login?next=%2Fadmin-dashboard', { replace: true });
+            return;
+        }
         fetchElections();
         fetchCoupons();
         fetchUsers();
@@ -840,7 +858,7 @@ const AdminDashboard = () => {
                                         <div className="flex justify-between items-center pt-1 text-xs">
                                             <span className="font-mono text-slate-500 break-all">TX: {vote.txHash}</span>
                                             {vote.explorerUrl && (
-                                                <a href={vote.explorerUrl} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline font-bold flex items-center gap-1 shrink-0">
+                                                <a href={vote.explorerUrl} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline font-bold flex items-center gap-1 shrink-0">
                                                     Explorador <ExternalLink size={12} />
                                                 </a>
                                             )}

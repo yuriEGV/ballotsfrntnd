@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useDeferredValue } from 'react';
 import {
     Search, PlusCircle, CheckCircle, Clock, Activity, ChevronRight,
     RefreshCw, Loader2, Users, UserCheck, UserX, AlertCircle, Save,
@@ -1277,7 +1277,7 @@ const ConfigView = ({ user, elections, token, onRefresh, handlePayment }) => {
                                             className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-colors ${copied ? 'bg-emerald-500 text-white' : 'bg-blue-600 hover:bg-blue-700 text-white'}`}>
                                             {copied ? <>✓ Copiado!</> : <><Copy size={15} /> Copiar</>}
                                         </button>
-                                        <a href={votingLink} target="_blank" rel="noreferrer"
+                                        <a href={votingLink} target="_blank" rel="noopener noreferrer"
                                             className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl font-bold text-sm bg-slate-100 hover:bg-slate-200 text-slate-700 transition-colors">
                                             <ExternalLink size={15} /> Abrir
                                         </a>
@@ -1376,6 +1376,10 @@ const ClientDashboard = () => {
                 { electionId },
                 { headers: { Authorization: `Bearer ${token}` } }
             );
+            if (res.data?.freeActivated) {
+                await fetchElections();
+                return;
+            }
             if (res.data.init_point) {
                 window.location.href = res.data.init_point;
             }
@@ -1422,7 +1426,8 @@ const ClientDashboard = () => {
         navigate('/login');
     };
 
-    const filtered = elections.filter(e => e.title?.toLowerCase().includes(search.toLowerCase()));
+    const deferredSearch = useDeferredValue(search);
+    const filtered = elections.filter(e => e.title?.toLowerCase().includes(deferredSearch.toLowerCase()));
 
     // Fidedigna calculation: an election is 'ended' if its status is 'ended' OR endDate is past OR (voters and registered match and > 0)
     const isActuallyEnded = (e) => {
@@ -1600,7 +1605,7 @@ const ClientDashboard = () => {
                                                         </div>
                                                         {canOpenVoting ? (
                                                             <div className="flex gap-2 flex-wrap">
-                                                                <a href={isSurveyItem && election.plaza?.featuredInPlaza ? '/plaza' : `/vote/${election._id}`} target="_blank" rel="noreferrer"
+                                                                <a href={isSurveyItem && election.plaza?.featuredInPlaza ? '/plaza' : `/vote/${election._id}`} target="_blank" rel="noopener noreferrer"
                                                                     className={`flex items-center gap-1.5 px-4 py-2 rounded-xl font-bold text-sm transition-colors ${s.btn}`}>
                                                                     {election.status === 'ended' ? 'Finalizada' : 'Ver'} <ExternalLink size={14} />
                                                                 </a>
@@ -1757,7 +1762,7 @@ const ClientDashboard = () => {
                                                 <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between gap-2 flex-wrap text-xs">
                                                     <span className="font-mono text-slate-500 break-all">TX: {vote.txHash}</span>
                                                     {vote.explorerUrl && (
-                                                        <a href={vote.explorerUrl} target="_blank" rel="noreferrer" className="text-indigo-600 hover:underline font-bold flex items-center gap-1">
+                                                        <a href={vote.explorerUrl} target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:underline font-bold flex items-center gap-1">
                                                             Ver en Explorador <ExternalLink size={12} />
                                                         </a>
                                                     )}
